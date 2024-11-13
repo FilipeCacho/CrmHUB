@@ -1,26 +1,27 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
-		<TargetFramework>net8.0</TargetFramework>
+		<TargetFramework>net8.0-windows</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<SupportedOSPlatform>windows</SupportedOSPlatform>
+		<UseWindowsForms>true</UseWindowsForms>
 	</PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" Version="1.7.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.66.1" />
-    <PackageReference Include="Microsoft.PowerPlatform.Dataverse.Client" Version="1.2.2" />
-    <PackageReference Include="System.Formats.Asn1" Version="8.0.1" />
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.1" />
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
-    <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
-  </ItemGroup>
-
-	
-
+	<ItemGroup>
+		<Using Include="System.Windows.Forms" />
+		<Using Include="System.Drawing" />
+		<Using Include="System.Drawing.Drawing2D" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Meziantou.Framework.Win32.CredentialManager" Version="1.7.0" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.1" />
+		<PackageReference Include="Microsoft.Identity.Client" Version="4.66.1" />
+		<PackageReference Include="Microsoft.PowerPlatform.Dataverse.Client" Version="1.2.2" />
+		<PackageReference Include="System.Formats.Asn1" Version="8.0.1" />
+		<PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.1" />
+		<PackageReference Include="System.Text.Json" Version="8.0.5" />
+		<PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
+	</ItemGroup>
 </Project>
