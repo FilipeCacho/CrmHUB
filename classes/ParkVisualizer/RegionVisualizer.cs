@@ -22,6 +22,12 @@
     private string _currentFilter = "";
     private string _currentGroup = "All";
 
+    //font size
+    private readonly Font _regionTitleFont;
+    private readonly Font _regionDetailsFont;
+    private readonly Font _parkTitleFont;
+    private readonly Font _parkDetailsFont;
+
     //NA & EU padding
     private const int REGION_PADDING = 10;
     
@@ -36,7 +42,12 @@
         this.WindowState = FormWindowState.Maximized;
         this.Text = "Parks Visualization";
 
-        _smallFont = new Font(_font.FontFamily, _font.Size - 1);
+        // Initialize fonts with different sizes
+        _regionTitleFont = new Font("Segoe UI", 16f, FontStyle.Bold);  // Larger, bold font for region names
+        _regionDetailsFont = new Font("Segoe UI", 12f);                // Larger font for region details
+        _parkTitleFont = new Font("Segoe UI", 9.5f);                  // Original size for park names
+        _parkDetailsFont = new Font("Segoe UI", 8.5f);                // Original size for park details
+
         _centerFormat = new StringFormat
         {
             Alignment = StringAlignment.Center,
@@ -49,6 +60,44 @@
         InitializeControls();
         LoadRegions();
     }
+
+    public class BufferedPanel : Panel
+    {
+        public BufferedPanel()
+        {
+            this.DoubleBuffered = true;
+            this.SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.UserPaint |
+                ControlStyles.OptimizedDoubleBuffer,
+                true);
+
+            // Critical: Enable both scrollbars and ensure they're visible
+            this.AutoScroll = true;
+            this.VerticalScroll.Enabled = true;
+            this.VerticalScroll.Visible = true;
+
+            // Remove any minimum size constraints
+            this.AutoScrollMinSize = new Size(0, 0);
+
+            // Handle scroll wheel
+            this.MouseWheel += BufferedPanel_MouseWheel;
+        }
+
+        private void BufferedPanel_MouseWheel(object sender, MouseEventArgs e)
+        {
+            // Custom scroll wheel handling
+            int numberOfTextLinesToMove = e.Delta * SystemInformation.MouseWheelScrollLines / 120;
+            int numberOfPixelsToMove = numberOfTextLinesToMove * 20; // Adjust scroll speed
+
+            int newY = this.VerticalScroll.Value - numberOfPixelsToMove;
+            this.VerticalScroll.Value = Math.Max(this.VerticalScroll.Minimum,
+                Math.Min(this.VerticalScroll.Maximum, newY));
+
+            this.Invalidate();
+        }
+    }
+
 
     private void InitializeControls()
     {
@@ -69,26 +118,35 @@
     private void LoadRegions()
     {
         _regions = new List<Block>
+    {
+        new Block
         {
-            new Block
-            {
-                Name = "NA Region",
-                Type = "Region",
-                Region = "NA",
-                Size = 100,
-                Color = Color.FromArgb(135, 206, 235),
-                Details = "North America Region"
-            },
-            new Block
-            {
-                Name = "EU Region",
-                Type = "Region",
-                Region = "EU",
-                Size = 400,
-                Color = Color.FromArgb(144, 238, 144),
-                Details = "Europe Region (400 Parks)"
-            }
-        };
+            Name = "NA Region",
+            Type = "Region",
+            Region = "NA",
+            Size = 100,
+            Color = Color.FromArgb(135, 206, 235),
+            Details = "North America Region"
+        },
+        new Block
+        {
+            Name = "EU Region",
+            Type = "Region",
+            Region = "EU",
+            Size = 400,
+            Color = Color.FromArgb(144, 238, 144),
+            Details = "Europe Region (400 Parks)"
+        },
+        new Block
+        {
+            Name = "VT Region",
+            Type = "Region",
+            Region = "VT",
+            Size = 0,
+            Color = Color.FromArgb(255, 182, 193), // Light pink color
+            Details = "Virtual Region"
+        }
+    };
 
         // Initialize EU parks data
         var euParks = new List<Block>();
@@ -109,7 +167,6 @@
 
         RecalculateBlocks();
     }
-
     private void InitializeParkControls()
     {
         _controlPanel = new Panel
@@ -161,47 +218,83 @@
         var blocks = _isInParkView ? _displayedParks : _regions;
         if (blocks.Count == 0) return;
 
-        // Use different padding based on view type
-        int currentPadding = _isInParkView ? PARK_PADDING : REGION_PADDING;
-
-        // Get the available width accounting for scroll bar
-        int panelWidth = _mainPanel.ClientSize.Width - (SystemInformation.VerticalScrollBarWidth + 5);
-
-        // Calculate how many columns can fit in the panel
-        int cols = Math.Max(1, (panelWidth - currentPadding) / (BlockWidth + currentPadding));
-        int rows = (int)Math.Ceiling(blocks.Count / (double)cols);
-
-        // Calculate total width needed for all columns
-        int totalBlocksWidth = (cols * BlockWidth) + ((cols - 1) * currentPadding);
-
-        // Calculate the left offset to center the blocks
-        float startX = (panelWidth - totalBlocksWidth) / 2f;
-
-        // Position each block
-        for (int i = 0; i < blocks.Count; i++)
+        if (_isInParkView)
         {
-            int row = i / cols;
-            int col = i % cols;
+            // Parks view layout
+            int panelWidth = _mainPanel.ClientSize.Width;
+            int currentPadding = PARK_PADDING;
 
-            blocks[i].Rectangle = new RectangleF(
-                startX + (col * (BlockWidth + currentPadding)),
-                currentPadding + (row * (BlockHeight + currentPadding)),
-                BlockWidth,
-                BlockHeight
-            );
+            // Calculate available width accounting for scroll bar
+            int availableWidth = panelWidth - SystemInformation.VerticalScrollBarWidth - (2 * currentPadding);
+
+            // Calculate columns that fit in the width
+            int cols = Math.Max(1, availableWidth / (BlockWidth + currentPadding));
+
+            // Calculate rows needed for all parks
+            int rows = (int)Math.Ceiling(blocks.Count / (double)cols);
+
+            // Calculate total width of blocks in a row
+            int totalRowWidth = (cols * BlockWidth) + ((cols - 1) * currentPadding);
+            float startX = (availableWidth - totalRowWidth) / 2f + currentPadding;
+
+            // Position each block
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                int row = i / cols;
+                int col = i % cols;
+
+                blocks[i].Rectangle = new RectangleF(
+                    startX + (col * (BlockWidth + currentPadding)),
+                    currentPadding + (row * (BlockHeight + currentPadding)),
+                    BlockWidth,
+                    BlockHeight
+                );
+            }
+
+            // Calculate total height including all rows and padding
+            int totalHeight = (2 * currentPadding) + (rows * (BlockHeight + currentPadding));
+
+            // Ensure minimum content height is greater than view height to enable scrolling
+            int minHeight = Math.Max(totalHeight, _mainPanel.ClientSize.Height + 1);
+
+            // Set scroll size - critical for enabling scrolling
+            _mainPanel.SuspendLayout();
+            _mainPanel.AutoScrollMinSize = new Size(0, minHeight);
+            _mainPanel.VerticalScroll.Maximum = minHeight;
+            _mainPanel.ResumeLayout();
+        }
+        else
+        {
+            // Regions view layout remains the same
+            int panelWidth = _mainPanel.ClientSize.Width;
+            int panelHeight = _mainPanel.ClientSize.Height;
+            int availableWidth = panelWidth - (2 * REGION_PADDING);
+            int blockWidth = (availableWidth - (2 * REGION_PADDING)) / 3;
+            int blockHeight = panelHeight - (2 * REGION_PADDING);
+
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                blocks[i].Rectangle = new RectangleF(
+                    REGION_PADDING + (i * (blockWidth + REGION_PADDING)),
+                    REGION_PADDING,
+                    blockWidth,
+                    blockHeight
+                );
+            }
+
+            _mainPanel.AutoScrollMinSize = new Size(0, 0); // Disable scrolling for region view
         }
 
-        // Calculate total height needed for all blocks
-        int totalHeight = currentPadding + (rows * (BlockHeight + currentPadding));
-
-        // Force the scrollbar to appear by setting appropriate minimum size
-        _mainPanel.AutoScrollMinSize = new Size(
-            totalBlocksWidth + (2 * (int)startX), // Total width including centering margin
-            totalHeight + REGION_PADDING          // Total height plus bottom padding
-        );
-
-        // Refresh the panel
         _mainPanel.Invalidate();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (_mainPanel != null)
+        {
+            RecalculateBlocks();
+        }
     }
 
     private void DrawBlock(Graphics g, Block block)
@@ -215,7 +308,6 @@
         var borderPen = block == _hoveredBlock ? _hoverBorderPen : _normalBorderPen;
         if (_isInParkView)
         {
-            // Use thinner lines for parks to reduce visual clutter
             borderPen = block == _hoveredBlock ?
                 new Pen(Color.White, 2f) :
                 new Pen(Color.FromArgb(50, 50, 50), 0.5f);
@@ -235,13 +327,40 @@
 
         using var textBrush = new SolidBrush(Color.Black);
 
-        g.DrawString(block.Name, _font, textBrush, new RectangleF(
-            textRect.X, textRect.Y, textRect.Width, 25
-        ), _centerFormat);
+        if (_isInParkView)
+        {
+            // Parks view - use smaller fonts
+            g.DrawString(block.Name, _parkTitleFont, textBrush, new RectangleF(
+                textRect.X, textRect.Y, textRect.Width, 25
+            ), _centerFormat);
 
-        g.DrawString(block.Details, _smallFont, textBrush, new RectangleF(
-            textRect.X, textRect.Y + 30, textRect.Width, textRect.Height - 30
-        ), _centerFormat);
+            g.DrawString(block.Details, _parkDetailsFont, textBrush, new RectangleF(
+                textRect.X, textRect.Y + 30, textRect.Width, textRect.Height - 30
+            ), _centerFormat);
+        }
+        else
+        {
+            // Regions view - position text higher up
+            float titleHeight = 40;
+            float verticalSpacing = 10; // Reduced spacing between title and details
+            float topMargin = 50;       // Distance from top of block
+
+            // Draw the title in the upper portion
+            g.DrawString(block.Name, _regionTitleFont, textBrush, new RectangleF(
+                textRect.X,
+                textRect.Y + topMargin, // Position closer to top
+                textRect.Width,
+                titleHeight
+            ), _centerFormat);
+
+            // Draw the details right below the title
+            g.DrawString(block.Details, _regionDetailsFont, textBrush, new RectangleF(
+                textRect.X,
+                textRect.Y + topMargin + titleHeight + verticalSpacing,
+                textRect.Width,
+                titleHeight
+            ), _centerFormat);
+        }
 
         // Dispose of any new pens created for park view
         if (_isInParkView && borderPen != _hoverBorderPen && borderPen != _normalBorderPen)
@@ -257,30 +376,61 @@
             InitializeParkControls();
         }
 
+        // Reset state
         _isInParkView = true;
-        _allParks = parks;
-        _displayedParks = new List<Block>(parks); // Create a copy for filtering
+        _hoveredBlock = null;
+        _currentFilter = "";
+        _currentGroup = "All";
+
+        // Reset control values
+        if (_searchBox != null)
+            _searchBox.Text = "";
+        if (_groupingCombo != null)
+            _groupingCombo.SelectedItem = "All";
+
+        // Update parks data
+        _allParks = new List<Block>(parks); // Create a new copy
+        _displayedParks = new List<Block>(parks); // Create a new copy for filtering
+
         this.Text = "Parks Visualization - Parks";
 
+        // Ensure control panel is added
         if (_controlPanel != null && !Controls.Contains(_controlPanel))
         {
             Controls.Add(_controlPanel);
+            _controlPanel.BringToFront(); // Ensure control panel is visible
         }
+
+        // Reset scroll position
+        _mainPanel.AutoScrollPosition = new Point(0, 0);
 
         RecalculateBlocks();
         _mainPanel.Invalidate();
     }
 
+
     private void SwitchToRegionView()
     {
+        // Reset the park view state
         _isInParkView = false;
         _displayedParks.Clear();
         _allParks.Clear();
+        _hoveredBlock = null; // Reset hovered state
         this.Text = "Parks Visualization - Regions";
 
         if (_controlPanel != null)
         {
             Controls.Remove(_controlPanel);
+        }
+
+        // Reset any filtering
+        _currentFilter = "";
+        _currentGroup = "All";
+
+        // Clear scroll position
+        if (_mainPanel != null)
+        {
+            _mainPanel.AutoScrollPosition = new Point(0, 0);
         }
 
         RecalculateBlocks();
@@ -315,11 +465,18 @@
 
     private void MainPanel_Paint(object sender, PaintEventArgs e)
     {
-        e.Graphics.TranslateTransform(_mainPanel.AutoScrollPosition.X, _mainPanel.AutoScrollPosition.Y);
+        if (_isInParkView)
+        {
+            // Properly handle scroll transform for parks view
+            e.Graphics.TranslateTransform(_mainPanel.AutoScrollPosition.X, _mainPanel.AutoScrollPosition.Y);
+        }
+
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
         var blocks = _isInParkView ? _displayedParks : _regions;
+        if (blocks == null || blocks.Count == 0) return;
 
+        // Calculate visible region including scroll position
         var visibleRect = new Rectangle(
             -_mainPanel.AutoScrollPosition.X,
             -_mainPanel.AutoScrollPosition.Y,
@@ -341,7 +498,9 @@
     private void MainPanel_MouseMove(object sender, MouseEventArgs e)
     {
         var blocks = _isInParkView ? _displayedParks : _regions;
+        if (blocks.Count == 0) return;
 
+        // Correct mouse position calculation considering scroll
         Point mousePoint = new Point(
             e.X - _mainPanel.AutoScrollPosition.X,
             e.Y - _mainPanel.AutoScrollPosition.Y
@@ -353,36 +512,36 @@
         if (newHovered != previousHovered)
         {
             _hoveredBlock = newHovered;
-
-            if (previousHovered != null)
-            {
-                var rect = Rectangle.Round(previousHovered.Rectangle);
-                rect.Inflate(2, 2);
-                _mainPanel.Invalidate(rect);
-            }
-            if (newHovered != null)
-            {
-                var rect = Rectangle.Round(newHovered.Rectangle);
-                rect.Inflate(2, 2);
-                _mainPanel.Invalidate(rect);
-            }
+            _mainPanel.Invalidate(); // Invalidate entire panel to ensure proper redraw
         }
     }
 
     private void MainPanel_MouseClick(object sender, MouseEventArgs e)
     {
-        if (_isInParkView) return;
-
+        // Calculate mouse position considering scroll
         Point mousePoint = new Point(
             e.X - _mainPanel.AutoScrollPosition.X,
             e.Y - _mainPanel.AutoScrollPosition.Y
         );
 
-        var clickedBlock = _regions.FirstOrDefault(b => b.Rectangle.Contains(mousePoint));
-
-        if (clickedBlock?.Children.Any() == true)
+        if (_isInParkView)
         {
-            SwitchToParkView(clickedBlock.Children);
+            // If in park view, clicking anywhere should do nothing
+            return;
+        }
+        else
+        {
+            // In region view, check if a region was clicked
+            var clickedBlock = _regions.FirstOrDefault(b => b.Rectangle.Contains(mousePoint));
+
+            if (clickedBlock?.Children != null && clickedBlock.Children.Any())
+            {
+                // Reset scroll position before switching views
+                _mainPanel.AutoScrollPosition = new Point(0, 0);
+
+                // Switch to park view with the children of the clicked region
+                SwitchToParkView(clickedBlock.Children);
+            }
         }
     }
 
@@ -390,8 +549,10 @@
     {
         base.OnFormClosing(e);
         _centerFormat.Dispose();
-        _smallFont.Dispose();
-        _font.Dispose();
+        _regionTitleFont.Dispose();
+        _regionDetailsFont.Dispose();
+        _parkTitleFont.Dispose();
+        _parkDetailsFont.Dispose();
         _normalBorderPen.Dispose();
         _hoverBorderPen.Dispose();
     }
