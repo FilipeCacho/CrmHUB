@@ -22,7 +22,11 @@
     private string _currentFilter = "";
     private string _currentGroup = "All";
 
-    private const int BlockPadding = 10;
+    //NA & EU padding
+    private const int REGION_PADDING = 10;
+    
+    //Parks Padding
+    private const int PARK_PADDING = 3;     
     private const int BlockWidth = 220;
     private const int BlockHeight = 100;
 
@@ -157,28 +161,47 @@
         var blocks = _isInParkView ? _displayedParks : _regions;
         if (blocks.Count == 0) return;
 
-        int panelWidth = _mainPanel.ClientSize.Width;
-        int cols = Math.Max(1, (panelWidth - BlockPadding) / (BlockWidth + BlockPadding));
+        // Use different padding based on view type
+        int currentPadding = _isInParkView ? PARK_PADDING : REGION_PADDING;
+
+        // Get the available width accounting for scroll bar
+        int panelWidth = _mainPanel.ClientSize.Width - (SystemInformation.VerticalScrollBarWidth + 5);
+
+        // Calculate how many columns can fit in the panel
+        int cols = Math.Max(1, (panelWidth - currentPadding) / (BlockWidth + currentPadding));
         int rows = (int)Math.Ceiling(blocks.Count / (double)cols);
 
+        // Calculate total width needed for all columns
+        int totalBlocksWidth = (cols * BlockWidth) + ((cols - 1) * currentPadding);
+
+        // Calculate the left offset to center the blocks
+        float startX = (panelWidth - totalBlocksWidth) / 2f;
+
+        // Position each block
         for (int i = 0; i < blocks.Count; i++)
         {
             int row = i / cols;
             int col = i % cols;
 
             blocks[i].Rectangle = new RectangleF(
-                BlockPadding + (col * (BlockWidth + BlockPadding)),
-                BlockPadding + (row * (BlockHeight + BlockPadding)),
+                startX + (col * (BlockWidth + currentPadding)),
+                currentPadding + (row * (BlockHeight + currentPadding)),
                 BlockWidth,
                 BlockHeight
             );
         }
 
         // Calculate total height needed for all blocks
-        int totalHeight = BlockPadding + (rows * (BlockHeight + BlockPadding));
+        int totalHeight = currentPadding + (rows * (BlockHeight + currentPadding));
 
-        // Set the minimum size for scrolling
-        _mainPanel.AutoScrollMinSize = new Size(0, totalHeight);
+        // Force the scrollbar to appear by setting appropriate minimum size
+        _mainPanel.AutoScrollMinSize = new Size(
+            totalBlocksWidth + (2 * (int)startX), // Total width including centering margin
+            totalHeight + REGION_PADDING          // Total height plus bottom padding
+        );
+
+        // Refresh the panel
+        _mainPanel.Invalidate();
     }
 
     private void DrawBlock(Graphics g, Block block)
@@ -188,16 +211,26 @@
         using var brush = new SolidBrush(block.Color);
         g.FillRectangle(brush, rect);
 
-        g.DrawRectangle(
-            block == _hoveredBlock ? _hoverBorderPen : _normalBorderPen,
-            Rectangle.Round(rect)
-        );
+        // Use appropriate pen thickness based on view type
+        var borderPen = block == _hoveredBlock ? _hoverBorderPen : _normalBorderPen;
+        if (_isInParkView)
+        {
+            // Use thinner lines for parks to reduce visual clutter
+            borderPen = block == _hoveredBlock ?
+                new Pen(Color.White, 2f) :
+                new Pen(Color.FromArgb(50, 50, 50), 0.5f);
+        }
+
+        g.DrawRectangle(borderPen, Rectangle.Round(rect));
+
+        // Adjust text padding based on view type
+        int textPadding = _isInParkView ? PARK_PADDING * 2 : REGION_PADDING;
 
         var textRect = new RectangleF(
-            rect.X + BlockPadding,
-            rect.Y + BlockPadding,
-            rect.Width - (BlockPadding * 2),
-            rect.Height - (BlockPadding * 2)
+            rect.X + textPadding,
+            rect.Y + textPadding,
+            rect.Width - (textPadding * 2),
+            rect.Height - (textPadding * 2)
         );
 
         using var textBrush = new SolidBrush(Color.Black);
@@ -209,6 +242,12 @@
         g.DrawString(block.Details, _smallFont, textBrush, new RectangleF(
             textRect.X, textRect.Y + 30, textRect.Width, textRect.Height - 30
         ), _centerFormat);
+
+        // Dispose of any new pens created for park view
+        if (_isInParkView && borderPen != _hoverBorderPen && borderPen != _normalBorderPen)
+        {
+            borderPen.Dispose();
+        }
     }
 
     private void SwitchToParkView(List<Block> parks)
