@@ -171,23 +171,24 @@
     {
         _controlPanel = new Panel
         {
-            Height = 40,
+            Height = 50, // Increased height to ensure enough space
             Dock = DockStyle.Top,
-            Padding = new Padding(5)
+            Padding = new Padding(5),
+            BackColor = Color.White // Match the background color
         };
 
         _backButton = new Button
         {
             Text = "← Back to Regions",
             Width = 120,
-            Location = new Point(5, 8)
+            Location = new Point(5, 12) // Adjusted for better vertical centering
         };
         _backButton.Click += (s, e) => SwitchToRegionView();
 
         _searchBox = new TextBox
         {
             Width = 200,
-            Location = new Point(135, 8),
+            Location = new Point(135, 12), // Adjusted for better vertical centering
             PlaceholderText = "Search parks..."
         };
         _searchBox.TextChanged += (s, e) =>
@@ -199,7 +200,7 @@
         _groupingCombo = new ComboBox
         {
             Width = 150,
-            Location = new Point(345, 8),
+            Location = new Point(345, 12), // Adjusted for better vertical centering
             DropDownStyle = ComboBoxStyle.DropDownList
         };
         _groupingCombo.Items.AddRange(new object[] { "All", "00-19", "20-39", "40-59", "60-79", "80-99" });
@@ -237,6 +238,10 @@
             int totalRowWidth = (cols * BlockWidth) + ((cols - 1) * currentPadding);
             float startX = (availableWidth - totalRowWidth) / 2f + currentPadding;
 
+            // Add extra top padding to account for control panel
+            int topOffset = _controlPanel?.Height ?? 0;
+            int initialTopPadding = currentPadding + topOffset;
+
             // Position each block
             for (int i = 0; i < blocks.Count; i++)
             {
@@ -245,19 +250,19 @@
 
                 blocks[i].Rectangle = new RectangleF(
                     startX + (col * (BlockWidth + currentPadding)),
-                    currentPadding + (row * (BlockHeight + currentPadding)),
+                    initialTopPadding + (row * (BlockHeight + currentPadding)), // Use initialTopPadding here
                     BlockWidth,
                     BlockHeight
                 );
             }
 
             // Calculate total height including all rows and padding
-            int totalHeight = (2 * currentPadding) + (rows * (BlockHeight + currentPadding));
+            int totalHeight = initialTopPadding + (rows * (BlockHeight + currentPadding)) + currentPadding;
 
             // Ensure minimum content height is greater than view height to enable scrolling
             int minHeight = Math.Max(totalHeight, _mainPanel.ClientSize.Height + 1);
 
-            // Set scroll size - critical for enabling scrolling
+            // Set scroll size
             _mainPanel.SuspendLayout();
             _mainPanel.AutoScrollMinSize = new Size(0, minHeight);
             _mainPanel.VerticalScroll.Maximum = minHeight;
