@@ -1,7 +1,8 @@
-﻿// RegionVisualizer.cs - Handles the top level (NA/EU) visualization
-public class RegionVisualizer : Form
+﻿public class RegionVisualizer : Form
 {
     private List<Block> _regions = new();
+    private List<Block> _allParks = new(); // Store all parks
+    private List<Block> _displayedParks = new(); // Store filtered parks
     private Block? _hoveredBlock;
     private readonly Font _font = new("Segoe UI", 9.5f);
     private readonly Font _smallFont;
@@ -9,6 +10,17 @@ public class RegionVisualizer : Form
     private readonly Pen _normalBorderPen;
     private readonly Pen _hoverBorderPen;
     private BufferedPanel _mainPanel;
+
+    // Controls for park view
+    private Panel? _controlPanel;
+    private ComboBox? _groupingCombo;
+    private TextBox? _searchBox;
+    private Button? _backButton;
+
+    // State tracking
+    private bool _isInParkView = false;
+    private string _currentFilter = "";
+    private string _currentGroup = "All";
 
     private const int BlockPadding = 10;
     private const int BlockWidth = 220;
@@ -18,7 +30,7 @@ public class RegionVisualizer : Form
     {
         this.DoubleBuffered = true;
         this.WindowState = FormWindowState.Maximized;
-        this.Text = "Parks Visualization - Regions";
+        this.Text = "Parks Visualization";
 
         _smallFont = new Font(_font.FontFamily, _font.Size - 1);
         _centerFormat = new StringFormat
@@ -74,7 +86,7 @@ public class RegionVisualizer : Form
             }
         };
 
-        // Initialize EU parks data but don't visualize yet
+        // Initialize EU parks data
         var euParks = new List<Block>();
         for (int i = 0; i < 400; i++)
         {
@@ -94,20 +106,67 @@ public class RegionVisualizer : Form
         RecalculateBlocks();
     }
 
+    private void InitializeParkControls()
+    {
+        _controlPanel = new Panel
+        {
+            Height = 40,
+            Dock = DockStyle.Top,
+            Padding = new Padding(5)
+        };
+
+        _backButton = new Button
+        {
+            Text = "← Back to Regions",
+            Width = 120,
+            Location = new Point(5, 8)
+        };
+        _backButton.Click += (s, e) => SwitchToRegionView();
+
+        _searchBox = new TextBox
+        {
+            Width = 200,
+            Location = new Point(135, 8),
+            PlaceholderText = "Search parks..."
+        };
+        _searchBox.TextChanged += (s, e) =>
+        {
+            _currentFilter = _searchBox.Text;
+            UpdateDisplayedParks();
+        };
+
+        _groupingCombo = new ComboBox
+        {
+            Width = 150,
+            Location = new Point(345, 8),
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _groupingCombo.Items.AddRange(new object[] { "All", "00-19", "20-39", "40-59", "60-79", "80-99" });
+        _groupingCombo.SelectedItem = "All";
+        _groupingCombo.SelectedIndexChanged += (s, e) =>
+        {
+            _currentGroup = _groupingCombo.SelectedItem?.ToString() ?? "All";
+            UpdateDisplayedParks();
+        };
+
+        _controlPanel.Controls.AddRange(new Control[] { _backButton, _searchBox, _groupingCombo });
+    }
+
     private void RecalculateBlocks()
     {
-        if (_regions.Count == 0) return;
+        var blocks = _isInParkView ? _displayedParks : _regions;
+        if (blocks.Count == 0) return;
 
         int panelWidth = _mainPanel.ClientSize.Width;
         int cols = Math.Max(1, (panelWidth - BlockPadding) / (BlockWidth + BlockPadding));
-        int rows = (int)Math.Ceiling(_regions.Count / (double)cols);
+        int rows = (int)Math.Ceiling(blocks.Count / (double)cols);
 
-        for (int i = 0; i < _regions.Count; i++)
+        for (int i = 0; i < blocks.Count; i++)
         {
             int row = i / cols;
             int col = i % cols;
 
-            _regions[i].Rectangle = new RectangleF(
+            blocks[i].Rectangle = new RectangleF(
                 BlockPadding + (col * (BlockWidth + BlockPadding)),
                 BlockPadding + (row * (BlockHeight + BlockPadding)),
                 BlockWidth,
@@ -115,11 +174,11 @@ public class RegionVisualizer : Form
             );
         }
 
+        // Calculate total height needed for all blocks
         int totalHeight = BlockPadding + (rows * (BlockHeight + BlockPadding));
-        _mainPanel.AutoScrollMinSize = new Size(
-            panelWidth,
-            Math.Max(totalHeight, _mainPanel.ClientSize.Height)
-        );
+
+        // Set the minimum size for scrolling
+        _mainPanel.AutoScrollMinSize = new Size(0, totalHeight);
     }
 
     private void DrawBlock(Graphics g, Block block)
@@ -152,37 +211,129 @@ public class RegionVisualizer : Form
         ), _centerFormat);
     }
 
+    private void SwitchToParkView(List<Block> parks)
+    {
+        if (_controlPanel == null)
+        {
+            InitializeParkControls();
+        }
+
+        _isInParkView = true;
+        _allParks = parks;
+        _displayedParks = new List<Block>(parks); // Create a copy for filtering
+        this.Text = "Parks Visualization - Parks";
+
+        if (_controlPanel != null && !Controls.Contains(_controlPanel))
+        {
+            Controls.Add(_controlPanel);
+        }
+
+        RecalculateBlocks();
+        _mainPanel.Invalidate();
+    }
+
+    private void SwitchToRegionView()
+    {
+        _isInParkView = false;
+        _displayedParks.Clear();
+        _allParks.Clear();
+        this.Text = "Parks Visualization - Regions";
+
+        if (_controlPanel != null)
+        {
+            Controls.Remove(_controlPanel);
+        }
+
+        RecalculateBlocks();
+        _mainPanel.Invalidate();
+    }
+
+    private void UpdateDisplayedParks()
+    {
+        var filteredParks = _allParks;
+
+        if (_currentGroup != "All")
+        {
+            var range = _currentGroup.Split('-').Select(int.Parse).ToList();
+            filteredParks = filteredParks.Where(b =>
+            {
+                var parkNumber = int.Parse(b.Name.Split('-').Last());
+                return parkNumber >= range[0] && parkNumber <= range[1];
+            }).ToList();
+        }
+
+        if (!string.IsNullOrWhiteSpace(_currentFilter))
+        {
+            filteredParks = filteredParks.Where(b =>
+                b.Name.Contains(_currentFilter, StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+        }
+
+        _displayedParks = filteredParks;
+        RecalculateBlocks();
+        _mainPanel.Invalidate();
+    }
+
     private void MainPanel_Paint(object sender, PaintEventArgs e)
     {
         e.Graphics.TranslateTransform(_mainPanel.AutoScrollPosition.X, _mainPanel.AutoScrollPosition.Y);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-        foreach (var block in _regions)
+        var blocks = _isInParkView ? _displayedParks : _regions;
+
+        var visibleRect = new Rectangle(
+            -_mainPanel.AutoScrollPosition.X,
+            -_mainPanel.AutoScrollPosition.Y,
+            _mainPanel.ClientSize.Width,
+            _mainPanel.ClientSize.Height
+        );
+        visibleRect.Inflate(BlockWidth, BlockHeight);
+
+        foreach (var block in blocks)
         {
-            DrawBlock(e.Graphics, block);
+            Rectangle blockRect = Rectangle.Round(block.Rectangle);
+            if (visibleRect.IntersectsWith(blockRect))
+            {
+                DrawBlock(e.Graphics, block);
+            }
         }
     }
 
     private void MainPanel_MouseMove(object sender, MouseEventArgs e)
     {
+        var blocks = _isInParkView ? _displayedParks : _regions;
+
         Point mousePoint = new Point(
             e.X - _mainPanel.AutoScrollPosition.X,
             e.Y - _mainPanel.AutoScrollPosition.Y
         );
 
         var previousHovered = _hoveredBlock;
-        _hoveredBlock = _regions.FirstOrDefault(b => b.Rectangle.Contains(mousePoint));
+        var newHovered = blocks.FirstOrDefault(b => b.Rectangle.Contains(mousePoint));
 
-        if (_hoveredBlock != previousHovered)
+        if (newHovered != previousHovered)
         {
-            _mainPanel.Invalidate();
-            _mainPanel.Cursor = _hoveredBlock?.Children.Any() == true ?
-                Cursors.Hand : Cursors.Default;
+            _hoveredBlock = newHovered;
+
+            if (previousHovered != null)
+            {
+                var rect = Rectangle.Round(previousHovered.Rectangle);
+                rect.Inflate(2, 2);
+                _mainPanel.Invalidate(rect);
+            }
+            if (newHovered != null)
+            {
+                var rect = Rectangle.Round(newHovered.Rectangle);
+                rect.Inflate(2, 2);
+                _mainPanel.Invalidate(rect);
+            }
         }
     }
 
     private void MainPanel_MouseClick(object sender, MouseEventArgs e)
     {
+        if (_isInParkView) return;
+
         Point mousePoint = new Point(
             e.X - _mainPanel.AutoScrollPosition.X,
             e.Y - _mainPanel.AutoScrollPosition.Y
@@ -192,8 +343,7 @@ public class RegionVisualizer : Form
 
         if (clickedBlock?.Children.Any() == true)
         {
-            var parksVisualizer = new ParksVisualizerEU(clickedBlock.Children);
-            parksVisualizer.Show();
+            SwitchToParkView(clickedBlock.Children);
         }
     }
 
@@ -202,6 +352,7 @@ public class RegionVisualizer : Form
         base.OnFormClosing(e);
         _centerFormat.Dispose();
         _smallFont.Dispose();
+        _font.Dispose();
         _normalBorderPen.Dispose();
         _hoverBorderPen.Dispose();
     }
