@@ -135,7 +135,7 @@ public class MainMenuHandler
     private void DisplayMenu()
     {
         Console.WriteLine("=== Main Menu ===");
-        Console.WriteLine($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}");
+        Console.WriteLine($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}\n");
         Console.WriteLine("1. View info about 1 or 2 users");
         Console.WriteLine("2. Switch Environment");
         Console.WriteLine("3. Update Credentials");
@@ -150,7 +150,7 @@ public class MainMenuHandler
         Console.WriteLine("Press Enter to exit...");
         Console.ReadLine();
     }
-
+    
     private void ParkVisualizerCleanup()
     {
         foreach (Form form in Application.OpenForms)

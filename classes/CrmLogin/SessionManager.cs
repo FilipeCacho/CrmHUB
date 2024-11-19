@@ -10,6 +10,10 @@ public class SessionManager : IDisposable
     private static readonly object _lock = new object();
     private readonly ILogger<SessionManager> _logger;
 
+    private const string TokenCacheExtension = ".token";
+    private const string TokenLifetimeExtension = ".lifetime";
+    private readonly string _tokenLifetimePath;
+
     private volatile bool _isDisposed;
 
     // Main service client for Dynamics 365 connection
@@ -27,15 +31,81 @@ public class SessionManager : IDisposable
     // Maximum number of retry attempts for credential authentication
     private const int MaxCredentialRetries = 2;
 
+    // Token cache configuration
     private const string TokenCacheFolder = "CrmHub";
     private const string TokenCacheName = "TokenCache";
+    private readonly string _tokenCachePath;
 
-    
+    // Track token expiration to proactively refresh before it expires
+    private DateTime _tokenExpirationTime = DateTime.MinValue;
+    private const int TokenExpirationBufferMinutes = 5;
+
+    public enum AuthenticationState
+    {
+        NotAuthenticated,
+        CachedTokenValid,
+        RequiresInteractive
+    }
+
+    private AuthenticationState _authState = AuthenticationState.NotAuthenticated;
 
     private SessionManager(ILogger<SessionManager> logger)
     {
         _logger = logger;
+        _tokenCachePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            TokenCacheFolder,
+            EnvironmentsDetails.CurrentEnvironment,
+            TokenCacheName + TokenCacheExtension);
+
+        _tokenLifetimePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            TokenCacheFolder,
+            EnvironmentsDetails.CurrentEnvironment,
+            TokenCacheName + TokenLifetimeExtension);
+
+        InitializeTokenCache();
     }
+
+    private void SaveTokenLifetime()
+    {
+        if (_tokenExpirationTime <= DateTime.Now)
+        {
+            _tokenExpirationTime = DateTime.Now.AddHours(1);
+        }
+
+        try
+        {
+            File.WriteAllText(_tokenLifetimePath, _tokenExpirationTime.ToString("O"));
+            _logger.LogInformation($"Token lifetime saved. Expiration: {_tokenExpirationTime}");
+            Console.Clear();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save token lifetime");
+        }
+    }
+
+    private void LoadTokenLifetime()
+    {
+        try
+        {
+            if (File.Exists(_tokenLifetimePath))
+            {
+                var lifetimeStr = File.ReadAllText(_tokenLifetimePath);
+                if (DateTime.TryParse(lifetimeStr, out DateTime lifetime))
+                {
+                    _tokenExpirationTime = lifetime;
+                    _logger.LogInformation($"Loaded token lifetime. Expiration: {_tokenExpirationTime}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load token lifetime");
+        }
+    }
+
 
     private static SessionManager CreateInstance()
     {
@@ -147,9 +217,11 @@ public class SessionManager : IDisposable
     {
         lock (_lock)
         {
-            if (_serviceClient?.IsReady == true && _isConnected)
+            LogConnectionDetails();
+
+            if (_serviceClient?.IsReady == true && _isConnected && !IsTokenExpired())
             {
-                _logger.LogInformation("Using existing connection");
+                _logger.LogInformation("Using existing connection with valid token");
                 return;
             }
 
@@ -163,25 +235,29 @@ public class SessionManager : IDisposable
 
             try
             {
-                Console.WriteLine("\nAttempting to use existing authentication token...");
+                // First attempt: Silent token authentication
+                _logger.LogInformation("Attempting silent token authentication");
                 if (TryTokenAuthentication())
                 {
-                    Console.WriteLine("Successfully connected using existing token.");
                     return;
                 }
 
-                var (username, password) = CredentialManager.LoadCredentials();
-                bool isFirstTimeSetup = string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password);
-
-                if (isFirstTimeSetup)
+                // If silent auth failed but we have credentials, try those
+                if (_authState == AuthenticationState.RequiresInteractive)
                 {
-                    HandleFirstTimeSetup();
-                    return;
-                }
+                    var (username, password) = CredentialManager.LoadCredentials();
+                    bool isFirstTimeSetup = string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password);
 
-                if (TryStoredCredentialsWithRetry(username!, password!))
-                {
-                    return;
+                    if (isFirstTimeSetup)
+                    {
+                        HandleFirstTimeSetup();
+                        return;
+                    }
+
+                    if (TryStoredCredentialsWithRetry(username!, password!))
+                    {
+                        return;
+                    }
                 }
 
                 HandleCredentialFailure();
@@ -194,96 +270,202 @@ public class SessionManager : IDisposable
             }
         }
     }
+    private bool IsTokenExpired()
+    {
+        // First check if token expiration time is min value (uninitialized)
+        if (_tokenExpirationTime == DateTime.MinValue)
+            return true;
+
+        try
+        {
+            // Add buffer time and compare with current time
+            var expirationWithBuffer = _tokenExpirationTime.AddMinutes(-TokenExpirationBufferMinutes);
+            return DateTime.Now >= expirationWithBuffer;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            _logger.LogWarning("Token expiration time is invalid, treating as expired");
+            return true;
+        }
+    }
+
 
     // Attempts to authenticate using cached token before trying other methods
     private bool TryTokenAuthentication()
     {
-        lock (_lock)
+        try
         {
-            try
+            // If no token file exists or it's empty, require interactive auth
+            if (!File.Exists(_tokenCachePath) || new FileInfo(_tokenCachePath).Length == 0)
             {
-                string tokenCachePath = GetTokenCachePath();
-
-                // Skip if no token cache exists
-                if (!Directory.Exists(tokenCachePath) || !Directory.GetFiles(tokenCachePath).Any())
-                {
-                    return false;
-                }
-
-                string tokenConnectionString = BuildTokenConnectionString(tokenCachePath);
-
-                // Dispose of any existing client before creating a new one
-                _serviceClient?.Dispose();
-                _serviceClient = new ServiceClient(tokenConnectionString);
-
-                if (!_serviceClient.IsReady)
-                {
-                    return false;
-                }
-
-                // Verify connection and handle MFA if needed
-                VerifyConnection();
-                _isConnected = true;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogInformation($"Token authentication failed: {ex.Message}");
-                CleanupFailedConnection();
+                _authState = AuthenticationState.RequiresInteractive;
                 return false;
             }
+
+            // Try to connect with existing token first
+            string connectionString = BuildTokenConnectionString(_tokenCachePath, true);
+            _serviceClient?.Dispose();
+            _serviceClient = new ServiceClient(connectionString);
+
+            // If connection successful with existing token, we're done
+            if (_serviceClient.IsReady && VerifyConnectionQuietly())
+            {
+                _isConnected = true;
+                _tokenExpirationTime = DateTime.Now.AddHours(1);
+                SaveTokenLifetime();
+                return true;
+            }
+
+            // If token is expired, try silent refresh
+            string refreshConnectionString = connectionString +
+                ";ForceTokenRefresh=true;Browser=NoBrowser;Prompt=none;";
+
+            _serviceClient?.Dispose();
+            _serviceClient = new ServiceClient(refreshConnectionString);
+
+            if (_serviceClient.IsReady && VerifyConnectionQuietly())
+            {
+                _isConnected = true;
+                _tokenExpirationTime = DateTime.Now.AddHours(1);
+                SaveTokenLifetime();
+                return true;
+            }
+
+            _authState = AuthenticationState.RequiresInteractive;
+            return false;
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Token authentication failed");
+            _authState = AuthenticationState.RequiresInteractive;
+            return false;
+        }
+    }
+
+    private bool RefreshTokenSilently()
+    {
+        try
+        {
+            _logger.LogInformation("Attempting silent token refresh");
+
+            var refreshConnectionString = BuildTokenConnectionString(_tokenCachePath, true) +
+                $";ForceTokenRefresh=true;" +
+                $"TokenRefreshAttempts=3;" +
+                $"Browser=NoBrowser;" +
+                $"Prompt=none;";
+
+            using var tempClient = new ServiceClient(refreshConnectionString);
+
+            if (tempClient.IsReady && VerifyConnectionQuietly())
+            {
+                _serviceClient?.Dispose();
+                _serviceClient = new ServiceClient(refreshConnectionString);
+                _isConnected = true;
+                _tokenExpirationTime = DateTime.Now.AddHours(1);
+                SaveTokenLifetime(); // Save the new expiration time
+                _logger.LogInformation("Token refreshed successfully");
+                return true;
+            }
+
+            _logger.LogInformation("Token refresh failed");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Token refresh failed with error: " + ex.Message);
+            return false;
+        }
+    }
+
+    // Verify connection without triggering MFA
+    private bool VerifyConnectionQuietly()
+    {
+        try
+        {
+            if (_serviceClient == null) return false;
+
+            var start = DateTime.Now;
+            var request = new WhoAmIRequest();
+            var response = _serviceClient.Execute(request) as WhoAmIResponse;
+            var duration = DateTime.Now - start;
+
+            _logger.LogInformation($"Silent verification took: {duration.TotalMilliseconds}ms");
+
+            if (response != null)
+            {
+                _logger.LogInformation($"Verified connection for user: {response.UserId}");
+                return true;
+            }
+
+            _logger.LogInformation("Verification returned null response");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation($"Silent verification failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void LogConnectionDetails()
+    {
+        _logger.LogInformation($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}");
+        _logger.LogInformation($"Token Cache Path: {_tokenCachePath}");
+        _logger.LogInformation($"Token Expiration: {_tokenExpirationTime}");
+        _logger.LogInformation($"Is Connected: {_isConnected}");
+        _logger.LogInformation($"Service Client Ready: {_serviceClient?.IsReady}");
     }
 
     // Attempts to connect using stored credentials with retry logic
     private bool TryStoredCredentialsWithRetry(string username, string password)
     {
-        // Needs lock for ServiceClient operations
-        lock (_lock)
+        int retryCount = 0;
+        bool authSuccess = false;
+
+        while (!authSuccess && retryCount <= MaxCredentialRetries)
         {
-            int retryCount = 0;
-            bool authSuccess = false;
-
-            while (!authSuccess && retryCount <= MaxCredentialRetries)
+            try
             {
-                try
+                Console.WriteLine($"\nAttempting to connect with stored credentials (Attempt {retryCount + 1}/{MaxCredentialRetries + 1})...");
+
+                // Use stored credentials to get a new token
+                string connectionString = BuildCredentialConnectionString(username, password);
+
+                _serviceClient?.Dispose();
+                _serviceClient = new ServiceClient(connectionString);
+
+                if (!_serviceClient.IsReady)
                 {
-                    Console.WriteLine($"\nAttempting to connect with stored credentials (Attempt {retryCount + 1}/{MaxCredentialRetries + 1})...");
-                    string connectionString = BuildCredentialConnectionString(username, password);
-
-                    _serviceClient?.Dispose();
-                    _serviceClient = new ServiceClient(connectionString);
-
-                    if (!_serviceClient.IsReady)
-                    {
-                        throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
-                    }
-
-                    VerifyConnection();
-                    _isConnected = true;
-                    authSuccess = true;
-                    Console.WriteLine("Successfully connected with stored credentials.");
-                    return true;
+                    throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, $"Authentication attempt {retryCount + 1} failed");
-                    CleanupFailedConnection();
-                    retryCount++;
 
-                    if (retryCount <= MaxCredentialRetries)
+                // After successful authentication, token will be cached automatically
+                VerifyConnection();
+                _isConnected = true;
+                _tokenExpirationTime = DateTime.Now.AddHours(1); // Set expiration for new token
+                authSuccess = true;
+
+                Console.WriteLine("Successfully connected with stored credentials.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Authentication attempt {retryCount + 1} failed");
+                CleanupFailedConnection();
+                retryCount++;
+
+                if (retryCount <= MaxCredentialRetries)
+                {
+                    Console.WriteLine($"\nAuthentication failed: {ex.Message}");
+                    Console.WriteLine("Would you like to retry with the same credentials? (y/n)");
+                    if (Console.ReadLine()?.ToLower() != "y")
                     {
-                        Console.WriteLine($"\nAuthentication failed: {ex.Message}");
-                        Console.WriteLine("Would you like to retry with the same credentials? (y/n)");
-                        if (Console.ReadLine()?.ToLower() != "y")
-                        {
-                            break;
-                        }
+                        break;
                     }
                 }
             }
-            return false;
         }
+        return false;
     }
 
     // Handles first-time setup process including MFA authentication
@@ -400,33 +582,56 @@ public class SessionManager : IDisposable
         }
     }
 
-   
+
 
     // Builds connection string for token-based authentication
-    private string BuildTokenConnectionString(string tokenCachePath) =>
-        $"AuthType=OAuth;" +
-        $"Url={EnvironmentsDetails.DynamicsUrl};" +
-        $"AppId={EnvironmentsDetails.AppId};" +
-        $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
-        $"TokenCacheStorePath={tokenCachePath};" +
-        $"RequireNewInstance=False;" +  // Changed to False to reuse token
-        $"LoginPrompt=Never;" +         // Changed to Never to avoid unnecessary prompts
-        $"UseWebApi=true;" +
-        $"InteractiveLogin=true";
+    private string BuildTokenConnectionString(string tokenCachePath, bool silent = false) =>
+    $"AuthType=OAuth;" +
+    $"Url={EnvironmentsDetails.DynamicsUrl};" +
+    $"AppId={EnvironmentsDetails.AppId};" +
+    $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+    $"TokenCacheStorePath={tokenCachePath};" +
+    $"RequireNewInstance=False;" +
+    $"LoginPrompt=Never;" +
+    $"UseWebApi=true;" +
+    $"CacheRetrievalTimeout=120;" +
+    $"TokenCacheTimeout=120;" +
+    $"SkipDiscovery=true;" +
+    $"MaxRetries=3;" +
+    $"RetryDelay=10;" +
+    $"PreventBrowserPrompt=true;" +
+    $"PreferConnectionFromTokenCache=true;" +
+    $"OfflineAccess=true;" +
+    $"UseDefaultWebBrowser=false;" +
+    $"NoPrompt=true;" +
+    $"Browser=NoBrowser;" +               // Add this line
+    $"Prompt=none;" +                     // Add this line
+    $"TokenRefreshAttempts=3;" +
+    $"InteractiveLogin=false;" +
+    $"ForceTokenRefresh=false;" +
+    $"DisableTokenStorageProvider=false;" + // Add this line
+    $"EnableConnectionStatusEvents=true;" + // Add this line
+    $"ClientSecret={EnvironmentsDetails.AppId}";
 
     // Builds connection string for credential-based authentication
     private string BuildCredentialConnectionString(string username, string password) =>
-        $"AuthType=OAuth;" +
-        $"Url={EnvironmentsDetails.DynamicsUrl};" +
-        $"Username={username};" +
-        $"Password={password};" +
-        $"AppId={EnvironmentsDetails.AppId};" +
-        $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
-        $"TokenCacheStorePath={GetTokenCachePath()};" +
-        $"RequireNewInstance=True;" +   // Keep True for new credentials
-        $"LoginPrompt=Auto;" +          // Keep Auto for new credentials
-        $"UseWebApi=true;" +
-        $"InteractiveLogin=true";
+    $"AuthType=OAuth;" +
+    $"Url={EnvironmentsDetails.DynamicsUrl};" +
+    $"Username={username};" +
+    $"Password={password};" +
+    $"AppId={EnvironmentsDetails.AppId};" +
+    $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+    $"TokenCacheStorePath={_tokenCachePath};" +
+    $"RequireNewInstance=True;" +
+    $"LoginPrompt=Auto;" +
+    $"UseWebApi=true;" +
+    $"ClientSecret={EnvironmentsDetails.AppId};" +
+    $"CacheRetrievalTimeout=120;" +
+    $"TokenCacheTimeout=120;" +
+    $"InteractiveLogin=true;" +
+    $"PreferConnectionFromTokenCache=false;" + // Add this line
+    $"OfflineAccess=true;" +                  // Add this line
+    $"TokenRefreshAttempts=3";                // Add this line
 
     // Gets the secure path for storing authentication tokens
     private string GetTokenCachePath()
@@ -439,6 +644,64 @@ public class SessionManager : IDisposable
         // Create token cache directory if it doesn't exist
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    // Add a method to handle token cache initialization
+    private void InitializeTokenCache()
+    {
+        try
+        {
+            _logger.LogInformation($"Initializing token cache at: {_tokenCachePath}");
+
+            var cacheDir = Path.GetDirectoryName(_tokenCachePath);
+            if (cacheDir != null && !Directory.Exists(cacheDir))
+            {
+                _logger.LogInformation($"Creating token cache directory: {cacheDir}");
+                Directory.CreateDirectory(cacheDir);
+            }
+
+            // Don't create an empty file - let the authentication process handle file creation
+            var fileInfo = new FileInfo(_tokenCachePath);
+            if (fileInfo.Exists)
+            {
+                _logger.LogInformation($"Existing token cache found. Size: {fileInfo.Length} bytes");
+                if (fileInfo.Length == 0)
+                {
+                    _logger.LogInformation("Token cache file exists but is empty");
+                    File.Delete(_tokenCachePath);
+                    _logger.LogInformation("Deleted empty token cache file");
+                }
+            }
+            else
+            {
+                _logger.LogInformation("No existing token cache found - will be created during authentication");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to initialize token cache");
+            throw; // Rethrow to ensure setup problems are visible
+        }
+    }
+
+    private void LogTokenCacheStatus()
+    {
+        try
+        {
+            if (File.Exists(_tokenCachePath))
+            {
+                var fileInfo = new FileInfo(_tokenCachePath);
+                _logger.LogInformation($"Token cache status - Exists: true, Size: {fileInfo.Length} bytes, Last Write: {fileInfo.LastWriteTime}");
+            }
+            else
+            {
+                _logger.LogInformation("Token cache status - Exists: false");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking token cache status");
+        }
     }
 
     // Securely prompts user for credentials with validation

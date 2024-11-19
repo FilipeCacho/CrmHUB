@@ -3,6 +3,8 @@
     public const string CredentialTarget = "DynamicsConnection";
     public const string AppId = "51f81489-12ee-4a9e-aaae-a2591f45987d";
     public const string RedirectUri = "http://localhost";
+    public static string ClientSecret => AppId;
+
 
     // Environment URLs
     public static class Urls
@@ -10,6 +12,12 @@
         public const string PRD = "https://edpr.crm4.dynamics.com/";
         public const string PRE = "https://edprpre.crm4.dynamics.com/";
         public const string DEV = "https://edprdesarrollo1.crm4.dynamics.com/";
+    }
+
+    public static class TokenConfig
+    {
+        public const int CacheTimeoutMinutes = 60;
+        public const int TokenRefreshBufferMinutes = 5;
     }
 
     private static string _currentEnvironment = "PRD";

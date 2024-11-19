@@ -3,16 +3,13 @@
     public static void SwitchEnvironment()
     {
         Console.Clear();
-        Console.WriteLine("\nSelect environment to switch to:");
+        Console.WriteLine("Select environment to switch to:");
         Console.WriteLine("1. PRD (Production)");
         Console.WriteLine("2. PRE (Pre-Production)");
         Console.WriteLine("3. DEV (Development)");
         Console.Write("\nChoice (1-3): ");
 
-        // Handle null case for Console.ReadLine()
         string choice = Console.ReadLine() ?? string.Empty;
-
-        // Use string.Empty instead of null
         string newEnv = choice switch
         {
             "1" => "PRD",
@@ -27,11 +24,30 @@
             return;
         }
 
-        // Disconnect current session
+        // Important: Clean up old environment's connection before switching
         SessionManager.Instance.Disconnect();
 
         // Update environment
         EnvironmentsDetails.CurrentEnvironment = newEnv;
+
+        // Delete existing token cache for the new environment to force fresh authentication
+        string tokenCachePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CrmHub",
+            newEnv,
+            "TokenCache");
+
+        try
+        {
+            if (File.Exists(tokenCachePath))
+            {
+                File.Delete(tokenCachePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Could not clean up old token cache: {ex.Message}");
+        }
 
         // Try to connect to new environment
         if (SessionManager.Instance.TryConnect())
