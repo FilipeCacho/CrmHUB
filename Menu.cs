@@ -1,4 +1,5 @@
-﻿public class Program
+﻿using CrmHub.ParkVisualizer;
+public class Program
 {
     [STAThread]
     public static async Task Main()
@@ -98,9 +99,22 @@ public class MainMenuHandler
 
     private void HandleParkVisualizer()
     {
-        var form = new RegionVisualizer();
-        Application.Run(form);
-        ParkVisualizerCleanup();
+        try
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            var parkVisualizerForm = new ParkVisualizerForm();
+            parkVisualizerForm.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error launching Park Visualizer: {ex.Message}");
+        }
+        finally
+        {
+            ParkVisualizerCleanup();
+        }
     }
 
     private void ShowMainMenu()
@@ -147,7 +161,6 @@ public class MainMenuHandler
 
     private void Cleanup()
     {
-        ParkVisualizerCleanup();
-        // Add any additional cleanup here
+       
     }
 }
