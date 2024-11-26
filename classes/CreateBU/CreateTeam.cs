@@ -182,36 +182,48 @@ public class TeamManager
 
     private async Task<bool> UpdateTeamRolesIfNeededAsync(Guid teamId, string[] desiredRoles, Guid businessUnitId)
     {
-        var currentRoles = await GetTeamRolesAsync(teamId);
-        var desiredRoleSet = new HashSet<string>(desiredRoles);
-        var currentRoleSet = new HashSet<string>(currentRoles.Select(r => r.GetAttributeValue<string>("name")));
-
-        var rolesToAdd = desiredRoleSet.Except(currentRoleSet);
-        var rolesToRemove = currentRoleSet.Except(desiredRoleSet);
-
-        bool updated = false;
-
-        foreach (var roleName in rolesToAdd)
+        try
         {
-            var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId);
-            if (roleInfo.HasValue)
-            {
-                await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName);
-                updated = true;
-            }
-        }
+            var currentRoles = await GetTeamRolesAsync(teamId);
+            var desiredRoleSet = new HashSet<string>(desiredRoles ?? Array.Empty<string>());
+            var currentRoleSet = new HashSet<string>(currentRoles.Select(r => r.GetAttributeValue<string>("name")));
 
-        foreach (var roleName in rolesToRemove)
+            var rolesToAdd = desiredRoleSet.Except(currentRoleSet);
+            var rolesToRemove = currentRoleSet.Except(desiredRoleSet);
+
+            bool updated = false;
+
+            // Process roles to add
+            foreach (var roleName in rolesToAdd)
+            {
+                var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId);
+                if (roleInfo.HasValue)
+                {
+                    await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName);
+                    updated = true;
+                }
+            }
+
+            // Process roles to remove
+            foreach (var roleName in rolesToRemove)
+            {
+                var roleToRemove = currentRoles.FirstOrDefault(r => r.GetAttributeValue<string>("name") == roleName);
+                if (roleToRemove != null)
+                {
+                    await RemoveRoleFromTeamAsync(teamId, roleToRemove.Id, roleName);
+                    updated = true;
+                }
+            }
+
+            return updated;
+        }
+        catch (Exception ex)
         {
-            var roleToRemove = currentRoles.FirstOrDefault(r => r.GetAttributeValue<string>("name") == roleName);
-            if (roleToRemove != null)
-            {
-                await RemoveRoleFromTeamAsync(teamId, roleToRemove.Id, roleName);
-                updated = true;
-            }
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Warning: Error updating team roles: {ex.Message}");
+            Console.ResetColor();
+            return false;
         }
-
-        return updated;
     }
 
     private async Task AssignRolesToTeamAsync(Guid teamId, Guid businessUnitId, string[] roleNames)
@@ -255,18 +267,26 @@ public class TeamManager
     {
         try
         {
-            var assignRequest = new AssignRequest
+            // Create an associate request to link the team with the role
+            var associateRequest = new AssociateRequest
             {
                 Target = new EntityReference("team", teamId),
-                Assignee = new EntityReference("role", roleId)
+                RelatedEntities = new EntityReferenceCollection
+                {
+                    new EntityReference("role", roleId)
+                },
+                // Specify the N:N relationship name between team and role
+                Relationship = new Relationship("teamroles_association")
             };
 
-            await Task.Run(() => _serviceClient.Execute(assignRequest));
-            Console.WriteLine($"Role '{roleName}' assigned to team.");
+            await Task.Run(() => _serviceClient.Execute(associateRequest));
+            Console.WriteLine($"Role '{roleName}' assigned to team successfully.");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error assigning role '{roleName}' to team: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Warning: Error assigning role '{roleName}' to team: {ex.Message}");
+            Console.ResetColor();
         }
     }
 
@@ -315,31 +335,42 @@ public class TeamManager
 
     private async Task<List<Entity>> GetTeamRolesAsync(Guid teamId)
     {
-        var query = new QueryExpression("role")
+        try
         {
-            ColumnSet = new ColumnSet("roleid", "name"),
-            LinkEntities =
+            // Query to get all roles associated with the team
+            var query = new QueryExpression("role")
             {
-                new LinkEntity
+                ColumnSet = new ColumnSet("roleid", "name"),
+                LinkEntities =
                 {
-                    LinkFromEntityName = "role",
-                    LinkToEntityName = "teamroles",
-                    LinkFromAttributeName = "roleid",
-                    LinkToAttributeName = "roleid",
-                    JoinOperator = JoinOperator.Inner,
-                    LinkCriteria = new FilterExpression
+                    new LinkEntity
                     {
-                        Conditions =
+                        LinkFromEntityName = "role",
+                        LinkToEntityName = "teamroles",
+                        LinkFromAttributeName = "roleid",
+                        LinkToAttributeName = "roleid",
+                        JoinOperator = JoinOperator.Inner,
+                        LinkCriteria = new FilterExpression
                         {
-                            new ConditionExpression("teamid", ConditionOperator.Equal, teamId)
+                            Conditions =
+                            {
+                                new ConditionExpression("teamid", ConditionOperator.Equal, teamId)
+                            }
                         }
                     }
                 }
-            }
-        };
+            };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
-        return result.Entities.ToList();
+            var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+            return result.Entities.ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Warning: Error retrieving team roles: {ex.Message}");
+            Console.ResetColor();
+            return new List<Entity>();
+        }
     }
 
     private async Task<Guid> GetBusinessUnitIdAsync(string businessUnitName)
