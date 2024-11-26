@@ -12,7 +12,6 @@ public class SessionManager : IDisposable
 
     private const string TokenCacheExtension = ".token";
     private const string TokenLifetimeExtension = ".lifetime";
-    private readonly string _tokenLifetimePath;
 
     private volatile bool _isDisposed;
 
@@ -34,7 +33,10 @@ public class SessionManager : IDisposable
     // Token cache configuration
     private const string TokenCacheFolder = "CrmHub";
     private const string TokenCacheName = "TokenCache";
-    private readonly string _tokenCachePath;
+    private string _tokenCachePath;
+    private string _tokenLifetimePath;
+    private string _currentEnvironment;
+    private string _baseTokenPath;
 
     // Track token expiration to proactively refresh before it expires
     private DateTime _tokenExpirationTime = DateTime.MinValue;
@@ -52,60 +54,49 @@ public class SessionManager : IDisposable
     private SessionManager(ILogger<SessionManager> logger)
     {
         _logger = logger;
-        _tokenCachePath = Path.Combine(
+        _currentEnvironment = EnvironmentsDetails.CurrentEnvironment;
+        _baseTokenPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            TokenCacheFolder,
-            EnvironmentsDetails.CurrentEnvironment,
-            TokenCacheName + TokenCacheExtension);
+            TokenCacheFolder);
 
-        _tokenLifetimePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            TokenCacheFolder,
-            EnvironmentsDetails.CurrentEnvironment,
-            TokenCacheName + TokenLifetimeExtension);
-
+        UpdateTokenPaths();
         InitializeTokenCache();
     }
 
-    private void SaveTokenLifetime()
+    private void UpdateTokenPaths()
     {
-        if (_tokenExpirationTime <= DateTime.Now)
+        var envPath = Path.Combine(_baseTokenPath, EnvironmentsDetails.CurrentEnvironment);
+
+        // Create environment directory if it doesn't exist
+        if (!Directory.Exists(envPath))
         {
-            _tokenExpirationTime = DateTime.Now.AddHours(1);
+            Directory.CreateDirectory(envPath);
         }
 
-        try
-        {
-            File.WriteAllText(_tokenLifetimePath, _tokenExpirationTime.ToString("O"));
-            _logger.LogInformation($"Token lifetime saved. Expiration: {_tokenExpirationTime}");
-            Console.Clear();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to save token lifetime");
-        }
+        _tokenCachePath = Path.Combine(envPath, TokenCacheName + TokenCacheExtension);
+        _tokenLifetimePath = Path.Combine(envPath, TokenCacheName + TokenLifetimeExtension);
+
+        _logger.LogInformation($"Token paths updated for environment {EnvironmentsDetails.CurrentEnvironment}");
+        _logger.LogInformation($"New token cache path: {_tokenCachePath}");
     }
 
-    private void LoadTokenLifetime()
+    private void EnsureCorrectEnvironmentPaths()
     {
-        try
+        if (_currentEnvironment != EnvironmentsDetails.CurrentEnvironment)
         {
-            if (File.Exists(_tokenLifetimePath))
-            {
-                var lifetimeStr = File.ReadAllText(_tokenLifetimePath);
-                if (DateTime.TryParse(lifetimeStr, out DateTime lifetime))
-                {
-                    _tokenExpirationTime = lifetime;
-                    _logger.LogInformation($"Loaded token lifetime. Expiration: {_tokenExpirationTime}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to load token lifetime");
+            _logger.LogInformation($"Environment changed from {_currentEnvironment} to {EnvironmentsDetails.CurrentEnvironment}");
+            _currentEnvironment = EnvironmentsDetails.CurrentEnvironment;
+            UpdateTokenPaths();
+
+            // Reset all connection state
+            _isConnected = false;
+            _serviceClient?.Dispose();
+            _serviceClient = null;
+            _tokenExpirationTime = DateTime.MinValue;
+            _lastConnectionAttempt = DateTime.MinValue;
+            _authState = AuthenticationState.RequiresInteractive;
         }
     }
-
 
     private static SessionManager CreateInstance()
     {
@@ -123,20 +114,16 @@ public class SessionManager : IDisposable
         return new SessionManager(logger);
     }
 
-    // Returns the singleton instance of SessionManager
     public static SessionManager Instance => _instance;
 
-    // Gets or initializes the Dynamics 365 service client, ensuring thread-safe access
     public ServiceClient GetClient()
     {
-        // Synchronization lock for thread-safe connection management
         lock (_lock)
         {
             if (!_isConnected || _serviceClient == null)
             {
                 ConnectToService();
             }
-            // Validate service client initialization before returning
             return _serviceClient ?? throw new InvalidOperationException("Service client is not initialized");
         }
     }
@@ -149,14 +136,22 @@ public class SessionManager : IDisposable
             _serviceClient?.Dispose();
             _serviceClient = null;
             _isConnected = false;
+            _tokenExpirationTime = DateTime.MinValue;
+            _lastConnectionAttempt = DateTime.MinValue;
+            _authState = AuthenticationState.NotAuthenticated;
         }
     }
 
-    // Attempts to establish a connection and returns success status without throwing exceptions
     public bool TryConnect()
     {
         try
         {
+            // Force new connection when trying to connect explicitly
+            _serviceClient?.Dispose();
+            _serviceClient = null;
+            _isConnected = false;
+            _lastConnectionAttempt = DateTime.MinValue; // Reset throttling
+
             ConnectToService();
             return true;
         }
@@ -167,7 +162,6 @@ public class SessionManager : IDisposable
         }
     }
 
-    // Verifies if the current connection is active and valid
     public bool CheckConnection()
     {
         lock (_lock)
@@ -177,12 +171,9 @@ public class SessionManager : IDisposable
 
             try
             {
-                // Only perform actual connection check if sufficient time has passed
                 if (DateTime.Now - _lastConnectionAttempt >= ConnectionThrottle)
                 {
                     IOrganizationService orgService = _serviceClient;
-
-                    // Execute WhoAmI request to verify connection is active
                     _ = ((WhoAmIResponse)orgService.Execute(new WhoAmIRequest())).UserId;
                     _lastConnectionAttempt = DateTime.Now;
                 }
@@ -197,70 +188,49 @@ public class SessionManager : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (_isDisposed) return;
-
-        lock (_lock)
-        {
-            if (_isDisposed) return;
-            _isDisposed = true;
-
-            _logger.LogInformation("Disposing SessionManager");
-            Disconnect();
-        }
-
-        GC.SuppressFinalize(this);
-    }
-
     private void ConnectToService()
     {
         lock (_lock)
         {
-            LogConnectionDetails();
-
-            if (_serviceClient?.IsReady == true && _isConnected && !IsTokenExpired())
-            {
-                _logger.LogInformation("Using existing connection with valid token");
-                return;
-            }
-
-            if (DateTime.Now - _lastConnectionAttempt < ConnectionThrottle)
-            {
-                _logger.LogInformation("Connection attempt throttled");
-                return;
-            }
-
-            _lastConnectionAttempt = DateTime.Now;
-
             try
             {
-                // First attempt: Silent token authentication
-                _logger.LogInformation("Attempting silent token authentication");
-                if (TryTokenAuthentication())
+                EnsureCorrectEnvironmentPaths();
+                LogConnectionDetails();
+
+                // Reset throttling when environment changes
+                if (_currentEnvironment != EnvironmentsDetails.CurrentEnvironment)
                 {
+                    _lastConnectionAttempt = DateTime.MinValue;
+                }
+
+                // Remove throttling check here to allow immediate connection after environment switch
+                _lastConnectionAttempt = DateTime.Now;
+
+                // Clear existing connection
+                _serviceClient?.Dispose();
+                _serviceClient = null;
+                _isConnected = false;
+
+                // Always try interactive auth when switching environments
+                var (username, password) = CredentialManager.LoadCredentials();
+                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                {
+                    HandleFirstTimeSetup();
                     return;
                 }
 
-                // If silent auth failed but we have credentials, try those
-                if (_authState == AuthenticationState.RequiresInteractive)
+                string connectionString = BuildCredentialConnectionString(username!, password!);
+                _serviceClient = new ServiceClient(connectionString);
+
+                if (!_serviceClient.IsReady)
                 {
-                    var (username, password) = CredentialManager.LoadCredentials();
-                    bool isFirstTimeSetup = string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password);
-
-                    if (isFirstTimeSetup)
-                    {
-                        HandleFirstTimeSetup();
-                        return;
-                    }
-
-                    if (TryStoredCredentialsWithRetry(username!, password!))
-                    {
-                        return;
-                    }
+                    throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
                 }
 
-                HandleCredentialFailure();
+                VerifyConnection();
+                _isConnected = true;
+                _tokenExpirationTime = DateTime.Now.AddHours(1);
+                SaveTokenLifetime();
             }
             catch (Exception ex)
             {
@@ -270,15 +240,14 @@ public class SessionManager : IDisposable
             }
         }
     }
+
     private bool IsTokenExpired()
     {
-        // First check if token expiration time is min value (uninitialized)
         if (_tokenExpirationTime == DateTime.MinValue)
             return true;
 
         try
         {
-            // Add buffer time and compare with current time
             var expirationWithBuffer = _tokenExpirationTime.AddMinutes(-TokenExpirationBufferMinutes);
             return DateTime.Now >= expirationWithBuffer;
         }
@@ -289,25 +258,20 @@ public class SessionManager : IDisposable
         }
     }
 
-
-    // Attempts to authenticate using cached token before trying other methods
     private bool TryTokenAuthentication()
     {
         try
         {
-            // If no token file exists or it's empty, require interactive auth
             if (!File.Exists(_tokenCachePath) || new FileInfo(_tokenCachePath).Length == 0)
             {
                 _authState = AuthenticationState.RequiresInteractive;
                 return false;
             }
 
-            // Try to connect with existing token first
             string connectionString = BuildTokenConnectionString(_tokenCachePath, true);
             _serviceClient?.Dispose();
             _serviceClient = new ServiceClient(connectionString);
 
-            // If connection successful with existing token, we're done
             if (_serviceClient.IsReady && VerifyConnectionQuietly())
             {
                 _isConnected = true;
@@ -316,7 +280,6 @@ public class SessionManager : IDisposable
                 return true;
             }
 
-            // If token is expired, try silent refresh
             string refreshConnectionString = connectionString +
                 ";ForceTokenRefresh=true;Browser=NoBrowser;Prompt=none;";
 
@@ -342,42 +305,6 @@ public class SessionManager : IDisposable
         }
     }
 
-    private bool RefreshTokenSilently()
-    {
-        try
-        {
-            _logger.LogInformation("Attempting silent token refresh");
-
-            var refreshConnectionString = BuildTokenConnectionString(_tokenCachePath, true) +
-                $";ForceTokenRefresh=true;" +
-                $"TokenRefreshAttempts=3;" +
-                $"Browser=NoBrowser;" +
-                $"Prompt=none;";
-
-            using var tempClient = new ServiceClient(refreshConnectionString);
-
-            if (tempClient.IsReady && VerifyConnectionQuietly())
-            {
-                _serviceClient?.Dispose();
-                _serviceClient = new ServiceClient(refreshConnectionString);
-                _isConnected = true;
-                _tokenExpirationTime = DateTime.Now.AddHours(1);
-                SaveTokenLifetime(); // Save the new expiration time
-                _logger.LogInformation("Token refreshed successfully");
-                return true;
-            }
-
-            _logger.LogInformation("Token refresh failed");
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Token refresh failed with error: " + ex.Message);
-            return false;
-        }
-    }
-
-    // Verify connection without triggering MFA
     private bool VerifyConnectionQuietly()
     {
         try
@@ -407,6 +334,44 @@ public class SessionManager : IDisposable
         }
     }
 
+    private void SaveTokenLifetime()
+    {
+        if (_tokenExpirationTime <= DateTime.Now)
+        {
+            _tokenExpirationTime = DateTime.Now.AddHours(1);
+        }
+
+        try
+        {
+            File.WriteAllText(_tokenLifetimePath, _tokenExpirationTime.ToString("O"));
+            _logger.LogInformation($"Token lifetime saved. Expiration: {_tokenExpirationTime}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save token lifetime");
+        }
+    }
+
+    private void LoadTokenLifetime()
+    {
+        try
+        {
+            if (File.Exists(_tokenLifetimePath))
+            {
+                var lifetimeStr = File.ReadAllText(_tokenLifetimePath);
+                if (DateTime.TryParse(lifetimeStr, out DateTime lifetime))
+                {
+                    _tokenExpirationTime = lifetime;
+                    _logger.LogInformation($"Loaded token lifetime. Expiration: {_tokenExpirationTime}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load token lifetime");
+        }
+    }
+
     private void LogConnectionDetails()
     {
         _logger.LogInformation($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}");
@@ -416,7 +381,6 @@ public class SessionManager : IDisposable
         _logger.LogInformation($"Service Client Ready: {_serviceClient?.IsReady}");
     }
 
-    // Attempts to connect using stored credentials with retry logic
     private bool TryStoredCredentialsWithRetry(string username, string password)
     {
         int retryCount = 0;
@@ -428,7 +392,6 @@ public class SessionManager : IDisposable
             {
                 Console.WriteLine($"\nAttempting to connect with stored credentials (Attempt {retryCount + 1}/{MaxCredentialRetries + 1})...");
 
-                // Use stored credentials to get a new token
                 string connectionString = BuildCredentialConnectionString(username, password);
 
                 _serviceClient?.Dispose();
@@ -439,10 +402,9 @@ public class SessionManager : IDisposable
                     throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
                 }
 
-                // After successful authentication, token will be cached automatically
                 VerifyConnection();
                 _isConnected = true;
-                _tokenExpirationTime = DateTime.Now.AddHours(1); // Set expiration for new token
+                _tokenExpirationTime = DateTime.Now.AddHours(1);
                 authSuccess = true;
 
                 Console.WriteLine("Successfully connected with stored credentials.");
@@ -468,7 +430,6 @@ public class SessionManager : IDisposable
         return false;
     }
 
-    // Handles first-time setup process including MFA authentication
     private void HandleFirstTimeSetup()
     {
         lock (_lock)
@@ -502,9 +463,9 @@ public class SessionManager : IDisposable
                     Console.WriteLine("\nSetup completed successfully!");
                     return;
                 }
-                catch (Exception ex) // The ex variable was not being used
+                catch (Exception ex)
                 {
-                    Console.WriteLine($"\nSetup failed: {ex.Message}"); // Add this line to use the exception
+                    Console.WriteLine($"\nSetup failed: {ex.Message}");
                     Console.WriteLine("Would you like to try again? (y/n)");
                     if (Console.ReadLine()?.ToLower() != "y")
                     {
@@ -516,12 +477,10 @@ public class SessionManager : IDisposable
         }
     }
 
-    // Manages authentication failures and provides user options for resolution
     private void HandleCredentialFailure()
     {
         lock (_lock)
         {
-
             while (true)
             {
                 Console.WriteLine("\nWould you like to:");
@@ -535,14 +494,11 @@ public class SessionManager : IDisposable
                     try
                     {
                         var (username, password) = PromptForCredentials();
-
-                        // Create new connection with these credentials
                         string connectionString = BuildCredentialConnectionString(username, password);
 
                         Console.WriteLine("\nAttempting to connect with new credentials...");
                         Console.WriteLine("A browser window may open for MFA verification.");
 
-                        // Dispose of any existing client
                         _serviceClient?.Dispose();
                         _serviceClient = new ServiceClient(connectionString);
 
@@ -551,11 +507,9 @@ public class SessionManager : IDisposable
                             throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
                         }
 
-                        // Verify the connection works
                         VerifyConnection();
                         _isConnected = true;
-
-                        // Only save credentials after successful connection
+                        // Save credentials after successful connection
                         CredentialManager.SaveCredentials(username, password);
                         return;
                     }
@@ -582,71 +536,63 @@ public class SessionManager : IDisposable
         }
     }
 
-
-
-    // Builds connection string for token-based authentication
-    private string BuildTokenConnectionString(string tokenCachePath, bool silent = false) =>
-    $"AuthType=OAuth;" +
-    $"Url={EnvironmentsDetails.DynamicsUrl};" +
-    $"AppId={EnvironmentsDetails.AppId};" +
-    $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
-    $"TokenCacheStorePath={tokenCachePath};" +
-    $"RequireNewInstance=False;" +
-    $"LoginPrompt=Never;" +
-    $"UseWebApi=true;" +
-    $"CacheRetrievalTimeout=120;" +
-    $"TokenCacheTimeout=120;" +
-    $"SkipDiscovery=true;" +
-    $"MaxRetries=3;" +
-    $"RetryDelay=10;" +
-    $"PreventBrowserPrompt=true;" +
-    $"PreferConnectionFromTokenCache=true;" +
-    $"OfflineAccess=true;" +
-    $"UseDefaultWebBrowser=false;" +
-    $"NoPrompt=true;" +
-    $"Browser=NoBrowser;" +               // Add this line
-    $"Prompt=none;" +                     // Add this line
-    $"TokenRefreshAttempts=3;" +
-    $"InteractiveLogin=false;" +
-    $"ForceTokenRefresh=false;" +
-    $"DisableTokenStorageProvider=false;" + // Add this line
-    $"EnableConnectionStatusEvents=true;" + // Add this line
-    $"ClientSecret={EnvironmentsDetails.AppId}";
-
-    // Builds connection string for credential-based authentication
-    private string BuildCredentialConnectionString(string username, string password) =>
-    $"AuthType=OAuth;" +
-    $"Url={EnvironmentsDetails.DynamicsUrl};" +
-    $"Username={username};" +
-    $"Password={password};" +
-    $"AppId={EnvironmentsDetails.AppId};" +
-    $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
-    $"TokenCacheStorePath={_tokenCachePath};" +
-    $"RequireNewInstance=True;" +
-    $"LoginPrompt=Auto;" +
-    $"UseWebApi=true;" +
-    $"ClientSecret={EnvironmentsDetails.AppId};" +
-    $"CacheRetrievalTimeout=120;" +
-    $"TokenCacheTimeout=120;" +
-    $"InteractiveLogin=true;" +
-    $"PreferConnectionFromTokenCache=false;" + // Add this line
-    $"OfflineAccess=true;" +                  // Add this line
-    $"TokenRefreshAttempts=3";                // Add this line
-
-    // Gets the secure path for storing authentication tokens
-    private string GetTokenCachePath()
+    private string BuildTokenConnectionString(string tokenCachePath, bool silent = false)
     {
-        string path = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            TokenCacheFolder,
-            TokenCacheName);
+        // Ensure we're using the correct path for the current environment
+        EnsureCorrectEnvironmentPaths();
 
-        // Create token cache directory if it doesn't exist
-        Directory.CreateDirectory(path);
-        return path;
+        return $"AuthType=OAuth;" +
+        $"Url={EnvironmentsDetails.DynamicsUrl};" +
+        $"AppId={EnvironmentsDetails.AppId};" +
+        $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+        $"TokenCacheStorePath={_tokenCachePath};" +
+        $"RequireNewInstance=True;" +
+        $"LoginPrompt=Never;" +
+        $"UseWebApi=true;" +
+        $"CacheRetrievalTimeout=120;" +
+        $"TokenCacheTimeout=120;" +
+        $"SkipDiscovery=true;" +
+        $"MaxRetries=3;" +
+        $"RetryDelay=10;" +
+        $"PreventBrowserPrompt={silent};" +
+        $"PreferConnectionFromTokenCache=true;" +
+        $"OfflineAccess=true;" +
+        $"UseDefaultWebBrowser=false;" +
+        $"NoPrompt={silent};" +
+        $"Browser={(silent ? "NoBrowser" : "DefaultBrowser")};" +
+        $"Prompt={(silent ? "none" : "login")};" +
+        $"TokenRefreshAttempts=3;" +
+        $"InteractiveLogin={!silent};" +
+        $"ForceTokenRefresh=false;" +
+        $"DisableTokenStorageProvider=false;" +
+        $"EnableConnectionStatusEvents=true;" +
+        $"ClientSecret={EnvironmentsDetails.AppId}";
     }
 
-    // Add a method to handle token cache initialization
+    private string BuildCredentialConnectionString(string username, string password)
+    {
+        return $"AuthType=OAuth;" +
+        $"Url={EnvironmentsDetails.DynamicsUrl};" +
+        $"Username={username};" +
+        $"Password={password};" +
+        $"AppId={EnvironmentsDetails.AppId};" +
+        $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+        $"TokenCacheStorePath={_tokenCachePath};" +
+        $"RequireNewInstance=True;" +
+        $"LoginPrompt=Auto;" +
+        $"UseWebApi=true;" +
+        $"ClientSecret={EnvironmentsDetails.AppId};" +
+        $"CacheRetrievalTimeout=120;" +
+        $"TokenCacheTimeout=120;" +
+        $"InteractiveLogin=true;" +
+        $"PreferConnectionFromTokenCache=false;" +
+        $"OfflineAccess=true;" +
+        $"TokenRefreshAttempts=3;" +
+        $"MaxRetries=3;" +
+        $"RetryDelay=5;" +
+        $"EnableConnectionStatusEvents=true";
+    }
+
     private void InitializeTokenCache()
     {
         try
@@ -660,7 +606,6 @@ public class SessionManager : IDisposable
                 Directory.CreateDirectory(cacheDir);
             }
 
-            // Don't create an empty file - let the authentication process handle file creation
             var fileInfo = new FileInfo(_tokenCachePath);
             if (fileInfo.Exists)
             {
@@ -676,35 +621,16 @@ public class SessionManager : IDisposable
             {
                 _logger.LogInformation("No existing token cache found - will be created during authentication");
             }
+
+            LoadTokenLifetime();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to initialize token cache");
-            throw; // Rethrow to ensure setup problems are visible
+            throw;
         }
     }
 
-    private void LogTokenCacheStatus()
-    {
-        try
-        {
-            if (File.Exists(_tokenCachePath))
-            {
-                var fileInfo = new FileInfo(_tokenCachePath);
-                _logger.LogInformation($"Token cache status - Exists: true, Size: {fileInfo.Length} bytes, Last Write: {fileInfo.LastWriteTime}");
-            }
-            else
-            {
-                _logger.LogInformation("Token cache status - Exists: false");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error checking token cache status");
-        }
-    }
-
-    // Securely prompts user for credentials with validation
     private (string username, string password) PromptForCredentials()
     {
         _logger.LogInformation("Prompting user for credentials");
@@ -713,15 +639,12 @@ public class SessionManager : IDisposable
             Console.Write("\nUsername (email format): ");
             string? username = Console.ReadLine();
 
-            // Ensure both username and password are provided
             if (string.IsNullOrEmpty(username))
             {
                 throw new ArgumentException("Username cannot be empty.");
             }
 
             Console.Write("Password: ");
-
-            // Handle secure password input from console
             string password = PasswordHelper.GetSecurePassword();
 
             if (string.IsNullOrEmpty(password))
@@ -738,10 +661,8 @@ public class SessionManager : IDisposable
         }
     }
 
-    // Verifies connection by executing a WhoAmI request to Dynamics 365
     private void VerifyConnection()
     {
-        // Validate service client before verification attempt
         if (_serviceClient == null)
         {
             throw new InvalidOperationException("Service client is not initialized");
@@ -750,8 +671,6 @@ public class SessionManager : IDisposable
         try
         {
             IOrganizationService orgService = _serviceClient;
-
-            // Execute WhoAmI request to confirm connection and get user context
             var response = orgService.Execute(new WhoAmIRequest()) as WhoAmIResponse
                 ?? throw new Exception("Failed to verify connection - null response from WhoAmI request");
 
@@ -765,7 +684,6 @@ public class SessionManager : IDisposable
         }
     }
 
-    // Performs cleanup operations when connection attempts fail
     private void CleanupFailedConnection()
     {
         _logger.LogInformation("Cleaning up failed connection");
@@ -775,5 +693,21 @@ public class SessionManager : IDisposable
             _serviceClient = null;
         }
         _isConnected = false;
+    }
+
+    public void Dispose()
+    {
+        if (_isDisposed) return;
+
+        lock (_lock)
+        {
+            if (_isDisposed) return;
+            _isDisposed = true;
+
+            _logger.LogInformation("Disposing SessionManager");
+            Disconnect();
+        }
+
+        GC.SuppressFinalize(this);
     }
 }

@@ -24,39 +24,94 @@
             return;
         }
 
-        // Important: Clean up old environment's connection before switching
-        SessionManager.Instance.Disconnect();
-
-        // Update environment
-        EnvironmentsDetails.CurrentEnvironment = newEnv;
-
-        // Delete existing token cache for the new environment to force fresh authentication
-        string tokenCachePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CrmHub",
-            newEnv,
-            "TokenCache");
+        if (newEnv == EnvironmentsDetails.CurrentEnvironment)
+        {
+            Console.WriteLine($"Already connected to {newEnv} environment.");
+            return;
+        }
 
         try
         {
-            if (File.Exists(tokenCachePath))
+            // Step 1: Disconnect and cleanup
+            SessionManager.Instance.Disconnect();
+
+            // Step 2: Update environment setting
+            EnvironmentsDetails.CurrentEnvironment = newEnv;
+
+            // Step 3: Force new connection
+            Console.WriteLine($"\nConnecting to {newEnv} environment...");
+            if (SessionManager.Instance.TryConnect())
             {
-                File.Delete(tokenCachePath);
+                Console.WriteLine($"\nSuccessfully connected to {newEnv} environment!");
+                Thread.Sleep(1000); // Give user time to see success message
+            }
+            else
+            {
+                throw new Exception($"Failed to connect to {newEnv} environment");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Could not clean up old token cache: {ex.Message}");
+            Console.WriteLine($"\nError switching environment: {ex.Message}");
+            Console.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
+
+
+private static void CleanupTokenCache(string environment)
+    {
+        try
+        {
+            // Get the token cache directory for the specified environment
+            string tokenCacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CrmHub",
+                environment);
+
+            // Delete all token-related files if directory exists
+            if (Directory.Exists(tokenCacheDir))
+            {
+                // Delete all files with specific extensions
+                foreach (string file in Directory.GetFiles(tokenCacheDir, "*.*"))
+                {
+                    string extension = Path.GetExtension(file).ToLower();
+                    if (extension == ".token" || extension == ".lifetime" || extension == ".cache")
+                    {
+                        try
+                        {
+                            File.Delete(file);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Warning: Could not delete file {file}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Error cleaning up token cache: {ex.Message}");
+        }
+    }
+
+    private static void AttemptRecovery()
+    {
+        Console.WriteLine("\nAttempting to recover previous connection...");
+
+        // Try to reconnect a few times before giving up
+        for (int i = 0; i < 3; i++)
+        {
+            if (SessionManager.Instance.TryConnect())
+            {
+                Console.WriteLine("Successfully recovered connection.");
+                return;
+            }
+            Thread.Sleep(1000); // Wait a second between attempts
         }
 
-        // Try to connect to new environment
-        if (SessionManager.Instance.TryConnect())
-        {
-            Console.WriteLine($"\nSuccessfully switched to {newEnv} environment");
-        }
-        else
-        {
-            Console.WriteLine($"\nFailed to connect to {newEnv} environment. You can try again or continue with limited functionality.");
-        }
+        Console.WriteLine("WARNING: Could not recover connection. Please restart the application.");
     }
 }
