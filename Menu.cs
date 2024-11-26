@@ -70,6 +70,9 @@ public class MainMenuHandler
             case "4":
                 HandleParkVisualizer();
                 return false;
+                case "5":
+                CreateBuAndTeams();
+                return false;
             case "0":
                 return true; // Signal to exit
             default:
@@ -84,6 +87,34 @@ public class MainMenuHandler
         {
             var userInfoRetriever = new UserBasicInfoRetriever();
             await userInfoRetriever.RetrieveAndCompareUserInfoAsync();
+        }
+    }
+
+    private async Task CreateBuAndTeams()
+    {
+        try
+        {
+            List<TransformedTeamData> transformedTeams = FormatBUandTeams.FormatTeamData();
+            if (transformedTeams != null && transformedTeams.Count > 0)
+            {
+                // Create or verify Business Units
+                var buResults = await CreateBu.RunAsync(transformedTeams);
+
+                // Process teams (your existing team creation code)
+                var standardTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Standard);
+                var proprietaryTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Proprietary);
+
+                // Display results
+                ResultsDisplay.DisplayResults(buResults, standardTeamResults, proprietaryTeamResults);
+            }
+            else
+            {
+                Console.WriteLine("No teams to create were found, press any key to continue");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"An error occurred: {ex.Message}");
         }
     }
 
@@ -140,6 +171,7 @@ public class MainMenuHandler
         Console.WriteLine("2. Switch Environment");
         Console.WriteLine("3. Update Credentials");
         Console.WriteLine("4. Park visualizer");
+        Console.WriteLine("5. Create Bu and respective teams");
         Console.WriteLine("0. Exit");
         Console.Write("\nChoice: ");
     }
