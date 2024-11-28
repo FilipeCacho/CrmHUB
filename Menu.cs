@@ -12,6 +12,14 @@ public class Program
 
 public class MainMenuHandler
 {
+    private readonly ITeamOperationsHandler? _teamOperations;
+    public MainMenuHandler()
+    {
+        var consoleUI = new ConsoleUI();
+        var teamUserService = new TeamUserService();
+        _teamOperations = new TeamOperationsHandler(teamUserService, consoleUI);
+    }
+
     public async Task RunAsync()
     {
         try
@@ -56,23 +64,52 @@ public class MainMenuHandler
 
     private async Task<bool> HandleMenuChoice(string input)
     {
+
         switch (input)
         {
             case "1":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    await CreateBuAndTeams();
+                }
+                return false;
+
+            case "2":
+                if (ConnectionCheck.EnsureConnected() && _teamOperations != null)
+                {
+                    Console.Clear();
+                    await _teamOperations.ExtractUsersFromTeams();
+                }
+                return false;
+
+            case "3":
+                if (ConnectionCheck.EnsureConnected() && _teamOperations != null)
+                {
+                    Console.Clear();
+                    await _teamOperations.AssignTeamsToUsers();
+                }
+                return false;
+
+
+            case "6":
                 await HandleUserInfoRetrieval();
                 return false;
-            case "2":
+
+            case "7":
                 HandleEnvironmentSwitch();
                 return false;
-            case "3":
+
+            case "8":
                 HandleCredentialsUpdate();
                 return false;
-            case "4":
+            case "9":
                 HandleParkVisualizer();
                 return false;
-                case "5":
-                CreateBuAndTeams();
+
+            case "10":
+                await SharepointOrganizerAsync();
                 return false;
+
             case "0":
                 return true; // Signal to exit
             default:
@@ -148,6 +185,25 @@ public class MainMenuHandler
         }
     }
 
+    private async Task SharepointOrganizerAsync()
+    {
+        try
+        {
+            Console.WriteLine("Starting Sharepoint Organizer...");
+            var organizer = new MassiveNasFolderOrganizer();
+            await organizer.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error in Sharepoint Organizer: {ex.Message}");
+            Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            Console.ResetColor();
+            Console.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
     private void ShowMainMenu()
     {
         try
@@ -167,11 +223,22 @@ public class MainMenuHandler
     {
         Console.WriteLine("=== Main Menu ===");
         Console.WriteLine($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}\n");
-        Console.WriteLine("1. View info about 1 or 2 users");
-        Console.WriteLine("2. Switch Environment");
-        Console.WriteLine("3. Update Credentials");
-        Console.WriteLine("4. Park visualizer");
-        Console.WriteLine("5. Create Bu and respective teams");
+        
+        Console.WriteLine("Create Teams flow");
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------");
+        Console.WriteLine("1.  Create/Update Team Process (BU, Contrata team, EDPR Team) (1-5 is only for EU teams only)");
+        Console.WriteLine("2.  Extract users from BU and it's contrata Contrata team");
+        Console.WriteLine("3.  Give newly created team to extracted users");
+        Console.WriteLine("4.  Create views for workorders and notifications (ordens de trabajo e avisos)");
+        Console.WriteLine("--- Run the worflows in XRM Toolbox ---");
+        Console.WriteLine("5.  Change BU of users that have in their name the Contractor (Puesto de trabajo)");
+        Console.WriteLine("--- Activate the created BU(s) in the form ---");
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------");
+        Console.WriteLine("6. View info about 1 or 2 users");
+        Console.WriteLine("7. Switch Environment");
+        Console.WriteLine("8. Update Credentials");
+        Console.WriteLine("9. Park visualizer");
+        Console.WriteLine("10. Sharepoint Organizer");
         Console.WriteLine("0. Exit");
         Console.Write("\nChoice: ");
     }

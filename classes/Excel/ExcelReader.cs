@@ -206,6 +206,84 @@ public class ExcelReader : IDisposable
         return true;
     }
 
+    public static List<NasDownload>? ValidateNasDownloads()
+    {
+        if (!semaphore.Wait(TimeSpan.FromSeconds(30), CancellationToken.None))
+        {
+            throw new TimeoutException("Timeout waiting for Excel access");
+        }
+
+        try
+        {
+            lock (excelLock)
+            {
+                using (var package = new ExcelPackage(new FileInfo(filePath)))
+                {
+                    ExcelWorksheet? worksheet = package.Workbook.Worksheets["NAS Downloads"];
+                    if (worksheet == null)
+                    {
+                        Console.WriteLine("Error: Worksheet 'NAS Downloads' not found.");
+                        Console.ReadLine();
+                        return null;
+                    }
+
+                    // Validate headers
+                    if (worksheet.Cells[1, 1].Text != "Functional Location (level 3)" ||
+                        worksheet.Cells[1, 2].Text != "Year")
+                    {
+                        Console.WriteLine("Error: Invalid headers in NAS Downloads worksheet.");
+                        Console.ReadLine();
+                        return null;
+                    }
+
+                    int rowCount = worksheet.Dimension?.Rows ?? 0;
+                    List<NasDownload> downloads = new List<NasDownload>();
+
+                    // Skip header row
+                    for (int row = 2; row <= rowCount; row++)
+                    {
+                        string location = worksheet.Cells[row, 1].Text.Trim();
+                        string yearText = worksheet.Cells[row, 2].Text.Trim();
+
+                        if (string.IsNullOrWhiteSpace(location)) continue;
+
+                        // Validate location format
+                        var parts = location.Split('-');
+                        if (parts.Length < 3 || parts[0] != "0" || parts[1].Length != 2 ||
+                            (!CodesAndRoles.CountryCodeNA.Contains(parts[1]) &&
+                             !CodesAndRoles.CountryCodeEU.Contains(parts[1])))
+                        {
+                            Console.WriteLine($"Error: Invalid functional location format in row {row}: {location}");
+                            Console.ReadKey();
+                            return null;
+                        }
+
+                        // Validate year
+                        if (!int.TryParse(yearText, out int year) || year < 2000 || year > 2100)
+                        {
+                            Console.WriteLine($"Error: Invalid year in row {row}: {yearText}");
+                            Console.ReadKey();
+                            return null;
+                        }
+
+                        downloads.Add(new NasDownload
+                        {
+                            FunctionalLocation = location,
+                            Year = year
+                        });
+                    }
+
+                    return downloads;
+                }
+            }
+        }
+        finally
+        {
+            semaphore.Release();
+            ForceGarbageCollection();
+        }
+    }
+
     private static void LogWarning(string message)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
@@ -271,4 +349,10 @@ public class TeamRow
     public string ColumnC { get; set; }
     public string ColumnD { get; set; }
     public string ColumnE { get; set; }
+}
+
+public struct NasDownload
+{
+    public string FunctionalLocation { get; set; }
+    public int Year { get; set; }
 }

@@ -54,7 +54,7 @@ public class UserBasicInfoRetriever
             }
             catch (Exception ex)
             {
-                ErrorHandler.HandleException(ex);
+                await ErrorHandler.HandleException(ex);
             }
         }
 

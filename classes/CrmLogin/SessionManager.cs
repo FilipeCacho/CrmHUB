@@ -59,6 +59,15 @@ public class SessionManager : IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             TokenCacheFolder);
 
+        // Initialize both paths with default values
+        _tokenCachePath = Path.Combine(_baseTokenPath,
+            EnvironmentsDetails.CurrentEnvironment,
+            TokenCacheName + TokenCacheExtension);
+
+        _tokenLifetimePath = Path.Combine(_baseTokenPath,
+            EnvironmentsDetails.CurrentEnvironment,
+            TokenCacheName + TokenLifetimeExtension);
+
         UpdateTokenPaths();
         InitializeTokenCache();
     }
