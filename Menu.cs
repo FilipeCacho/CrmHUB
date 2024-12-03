@@ -107,33 +107,43 @@ public class MainMenuHandler
                 return false;
 
             case "10":
-                try
-                {
-                    var processor = new NasQueryProcessor();
-                    var nasLinks = await processor.ProcessNasDownloadsAsync();
 
-                    // Only proceed if we got some links
-                    if (nasLinks != null && nasLinks.Any())
-                    {
-                        var massiveProcessor = new MassiveDownloadProcessor(nasLinks);
-                        await massiveProcessor.ProcessDownloadRegistrationAsync();
-                    }
-                    else
-                    {
-                        Console.WriteLine("\nNo NAS links were found to process.");
-                    }
-                }
-                catch (Exception ex)
+                if (ConnectionCheck.EnsureConnected())
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"\nError in massive download process: {ex.Message}");
-                    Console.ResetColor();
+
+                    try
+                    {
+                        var processor = new NasQueryProcessor();
+                        var nasLinks = await processor.ProcessNasDownloadsAsync();
+
+                        // Only proceed if we got some links
+                        if (nasLinks != null && nasLinks.Any())
+                        {
+                            var massiveProcessor = new MassiveDownloadProcessor(nasLinks);
+                            await massiveProcessor.ProcessDownloadRegistrationAsync();
+                        }
+                        else
+                        {
+                            Console.WriteLine("\nNo NAS links were found to process.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"\nError in massive download process: {ex.Message}");
+                        Console.ResetColor();
+                    }
                 }
                 return false;
 
             case "11":
-                //Folder organizer
-                await SharepointOrganizerAsync();
+
+                if (ConnectionCheck.EnsureConnected())
+                {
+
+                    //Folder organizer
+                    await SharepointOrganizerAsync();
+                }
                 return false;
 
             case "0":
@@ -223,11 +233,9 @@ public class MainMenuHandler
         Console.Clear();
         try
         {
-            Console.WriteLine("Starting Sharepoint Organizer...");
-
             //folder organizer
-            var organizer = new SimpleFileOrganizer();
-            organizer.Run();
+            var organizer = new NasLocalFileOrganizer();
+            await organizer.RunAsync();
         }
         catch (Exception ex)
         {
