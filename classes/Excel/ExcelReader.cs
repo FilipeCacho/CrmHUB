@@ -206,13 +206,12 @@ public class ExcelReader : IDisposable
         return true;
     }
 
-    public static List<NasDownload>? ValidateNasDownloads()
+    public static List<string>? ValidateNasDownloads()
     {
         if (!semaphore.Wait(TimeSpan.FromSeconds(30), CancellationToken.None))
         {
             throw new TimeoutException("Timeout waiting for Excel access");
         }
-
         try
         {
             lock (excelLock)
@@ -227,29 +226,38 @@ public class ExcelReader : IDisposable
                         return null;
                     }
 
-                    // Validate headers
-                    if (worksheet.Cells[1, 1].Text != "Functional Location (level 3)" ||
-                        worksheet.Cells[1, 2].Text != "Year")
+                    // Validate header
+                    if (worksheet.Cells[1, 1].Text != "Functional Location (level 3)")
                     {
-                        Console.WriteLine("Error: Invalid headers in NAS Downloads worksheet.");
+                        Console.WriteLine("Error: Invalid header in NAS Downloads worksheet.");
                         Console.ReadLine();
                         return null;
                     }
 
                     int rowCount = worksheet.Dimension?.Rows ?? 0;
-                    List<NasDownload> downloads = new List<NasDownload>();
+                    List<string> downloads = new List<string>();
 
-                    // Skip header row
+                    // Process rows
                     for (int row = 2; row <= rowCount; row++)
                     {
                         string location = worksheet.Cells[row, 1].Text.Trim();
-                        string yearText = worksheet.Cells[row, 2].Text.Trim();
 
-                        if (string.IsNullOrWhiteSpace(location)) continue;
+                        // Skip completely empty rows
+                        if (string.IsNullOrWhiteSpace(location))
+                            continue;
+
+                        // Count dashes in the location string
+                        int dashCount = location.Count(c => c == '-');
+                        if (dashCount != 2)
+                        {
+                            Console.WriteLine($"Error: Functional location in row {row} must contain exactly 2 dashes. Found: {dashCount} dashes in {location}");
+                            Console.ReadKey();
+                            return null;
+                        }
 
                         // Validate location format
                         var parts = location.Split('-');
-                        if (parts.Length < 3 || parts[0] != "0" || parts[1].Length != 2 ||
+                        if (parts[0] != "0" || parts[1].Length != 2 ||
                             (!CodesAndRoles.CountryCodeNA.Contains(parts[1]) &&
                              !CodesAndRoles.CountryCodeEU.Contains(parts[1])))
                         {
@@ -258,19 +266,15 @@ public class ExcelReader : IDisposable
                             return null;
                         }
 
-                        // Validate year
-                        if (!int.TryParse(yearText, out int year) || year < 2000 || year > 2100)
-                        {
-                            Console.WriteLine($"Error: Invalid year in row {row}: {yearText}");
-                            Console.ReadKey();
-                            return null;
-                        }
+                        downloads.Add(location);
+                    }
 
-                        downloads.Add(new NasDownload
-                        {
-                            FunctionalLocation = location,
-                            Year = year
-                        });
+                    // Additional validation: Check for empty worksheet
+                    if (downloads.Count == 0)
+                    {
+                        Console.WriteLine("Error: No valid data found in the worksheet.");
+                        Console.ReadKey();
+                        return null;
                     }
 
                     return downloads;

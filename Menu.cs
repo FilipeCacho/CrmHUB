@@ -107,6 +107,32 @@ public class MainMenuHandler
                 return false;
 
             case "10":
+                try
+                {
+                    var processor = new NasQueryProcessor();
+                    var nasLinks = await processor.ProcessNasDownloadsAsync();
+
+                    // Only proceed if we got some links
+                    if (nasLinks != null && nasLinks.Any())
+                    {
+                        var massiveProcessor = new MassiveDownloadProcessor(nasLinks);
+                        await massiveProcessor.ProcessDownloadRegistrationAsync();
+                    }
+                    else
+                    {
+                        Console.WriteLine("\nNo NAS links were found to process.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"\nError in massive download process: {ex.Message}");
+                    Console.ResetColor();
+                }
+                return false;
+
+            case "11":
+                //Folder organizer
                 await SharepointOrganizerAsync();
                 return false;
 
@@ -185,13 +211,23 @@ public class MainMenuHandler
         }
     }
 
+    private async Task MassivePrepAsync()
+    {
+        //extract from excel and run query to fetch NAS links
+        var processor = new NasQueryProcessor();
+        await processor.ProcessNasDownloadsAsync();
+    }
+
     private async Task SharepointOrganizerAsync()
     {
+        Console.Clear();
         try
         {
             Console.WriteLine("Starting Sharepoint Organizer...");
-            var organizer = new MassiveNasFolderOrganizer();
-            await organizer.RunAsync();
+
+            //folder organizer
+            var organizer = new SimpleFileOrganizer();
+            organizer.Run();
         }
         catch (Exception ex)
         {
@@ -238,7 +274,11 @@ public class MainMenuHandler
         Console.WriteLine("7. Switch Environment");
         Console.WriteLine("8. Update Credentials");
         Console.WriteLine("9. Park visualizer");
-        Console.WriteLine("10. Sharepoint Organizer");
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------");
+        Console.WriteLine("Extract workoders (only) attachments from EDP NAS");
+        Console.WriteLine("10. Prepare NAS file extraction");
+        Console.WriteLine("11. NAS File local Organizer");
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("0. Exit");
         Console.Write("\nChoice: ");
     }
