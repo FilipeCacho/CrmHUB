@@ -1,32 +1,102 @@
 ﻿using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk.Query;
 using Microsoft.Xrm.Sdk;
+using System.Collections.Concurrent;
 
-public class CreateBu
+public sealed class CreateBu
 {
+    // Record to hold the creation result with modern C# record type
+    public sealed record BuCreationResult
+    {
+        public required string BuName { get; init; }
+        public required bool Exists { get; init; }
+        public required bool WasUpdated { get; init; }
+        public bool Cancelled { get; init; }
+    }
+
     public static async Task<List<BuCreationResult>> RunAsync(List<TransformedTeamData> transformedTeams)
     {
-        var results = new List<BuCreationResult>();
-        try
-        {
-            var buManager = new DataverseBusinessUnitManager(SessionManager.Instance.GetClient());
+        // Display warning and wait for user confirmation
+        Console.WriteLine("Press any key to start the BU creation process. Press 'q' at any time to cancel.");
+        Console.WriteLine("Note: Cancellation will complete the current BU operation before stopping.");
+        Console.ReadKey(true);
 
-            foreach (var team in transformedTeams)
+        // Create cancellation token source that will be triggered when 'q' is pressed
+        using var cts = new CancellationTokenSource();
+        var results = new ConcurrentBag<BuCreationResult>();
+
+        // Start key monitoring task
+        _ = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
             {
-                try
+                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
                 {
-                    var (exists, wasUpdated) = await buManager.CreateOrUpdateBusinessUnitAsync(team);
-                    results.Add(new BuCreationResult { BuName = team.Bu, Exists = exists, WasUpdated = wasUpdated });
-                    Console.WriteLine($"Business Unit '{team.Bu}' {(exists ? (wasUpdated ? "updated" : "already exists") : "created")}.\n");
-                }
-                catch (Exception ex)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Error processing Business Unit '{team.Bu}': {ex.Message}");
-                    Console.ResetColor();
-                    results.Add(new BuCreationResult { BuName = team.Bu, Exists = false, WasUpdated = false });
+                    cts.Cancel();
+                    Console.WriteLine("\nCancellation requested. Completing current operation...");
+                    break;
                 }
             }
+        });
+
+        try
+        {
+            // Initialize the business unit manager with modern using declaration
+            using var serviceClient = SessionManager.Instance.GetClient();
+            var buManager = new DataverseBusinessUnitManager(serviceClient);
+
+            // Process teams with parallel execution for better performance
+            await Parallel.ForEachAsync(transformedTeams,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = 3,
+                    CancellationToken = cts.Token
+                },
+                async (team, token) =>
+                {
+                    try
+                    {
+                        var (exists, wasUpdated) = await buManager.CreateOrUpdateBusinessUnitAsync(team, token);
+                        results.Add(new BuCreationResult
+                        {
+                            BuName = team.Bu,
+                            Exists = exists,
+                            WasUpdated = wasUpdated,
+                            Cancelled = false
+                        });
+
+                        await Console.Out.WriteLineAsync(
+                            $"Business Unit '{team.Bu}' {(exists ? (wasUpdated ? "updated" : "already exists") : "created")}.\n");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        results.Add(new BuCreationResult
+                        {
+                            BuName = team.Bu,
+                            Exists = false,
+                            WasUpdated = false,
+                            Cancelled = true
+                        });
+                        await Console.Out.WriteLineAsync($"Operation cancelled for Business Unit '{team.Bu}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        await Console.Out.WriteLineAsync($"Error processing Business Unit '{team.Bu}': {ex.Message}");
+                        Console.ResetColor();
+                        results.Add(new BuCreationResult
+                        {
+                            BuName = team.Bu,
+                            Exists = false,
+                            WasUpdated = false,
+                            Cancelled = false
+                        });
+                    }
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("\nOperation was cancelled by user.");
         }
         catch (Exception ex)
         {
@@ -35,39 +105,40 @@ public class CreateBu
             Console.ResetColor();
         }
 
-        return results;
+        return results.ToList();
     }
 }
 
-public class DataverseBusinessUnitManager
+public sealed class DataverseBusinessUnitManager
 {
     private readonly ServiceClient _serviceClient;
 
     public DataverseBusinessUnitManager(ServiceClient serviceClient)
     {
-        _serviceClient = serviceClient;
+        _serviceClient = serviceClient ?? throw new ArgumentNullException(nameof(serviceClient));
     }
 
-    public async Task<(bool exists, bool updated)> CreateOrUpdateBusinessUnitAsync(TransformedTeamData team)
+    public async Task<(bool exists, bool updated)> CreateOrUpdateBusinessUnitAsync(
+        TransformedTeamData team,
+        CancellationToken cancellationToken = default)
     {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("Starting business unit creation/update process for: ");
-        Console.ResetColor();
-        Console.Write(team.Bu.Trim() + "\n");
+        ArgumentNullException.ThrowIfNull(team);
 
-        var existingBu = await GetExistingBusinessUnit(team.Bu.Trim());
-        if (existingBu != null)
-        {
-            return await UpdateBusinessUnitIfNeeded(existingBu, team);
-        }
-        else
-        {
-            var created = await CreateNewBusinessUnitAsync(team);
-            return (created, false);
-        }
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        await Console.Out.WriteAsync("Starting business unit creation/update process for: ");
+        Console.ResetColor();
+        await Console.Out.WriteLineAsync(team.Bu.Trim());
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var existingBu = await GetExistingBusinessUnit(team.Bu.Trim(), cancellationToken);
+
+        return existingBu is not null
+            ? await UpdateBusinessUnitIfNeeded(existingBu, team, cancellationToken)
+            : (await CreateNewBusinessUnitAsync(team, cancellationToken), false);
     }
 
-    private async Task<Entity?> GetExistingBusinessUnit(string businessUnitName)
+    private async Task<Entity?> GetExistingBusinessUnit(string businessUnitName, CancellationToken cancellationToken)
     {
         var query = new QueryExpression("businessunit")
         {
@@ -81,73 +152,82 @@ public class DataverseBusinessUnitManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
-        return result.Entities.Count > 0 ? result.Entities[0] : null;
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
+        return result.Entities.FirstOrDefault();
     }
 
-    private async Task<(bool, bool)> UpdateBusinessUnitIfNeeded(Entity existingBu, TransformedTeamData team)
+    private async Task<(bool exists, bool updated)> UpdateBusinessUnitIfNeeded(
+        Entity existingBu,
+        TransformedTeamData team,
+        CancellationToken cancellationToken)
     {
-        bool updated = false;
-        var updateEntity = new Entity("businessunit") { Id = existingBu.Id };
+        ArgumentNullException.ThrowIfNull(existingBu);
+        ArgumentNullException.ThrowIfNull(team);
 
-        if (existingBu.GetAttributeValue<string>("atos_codigout") != team.Bu)
+        var updateEntity = new Entity("businessunit") { Id = existingBu.Id };
+        var updated = false;
+
+        // Fix the null handling for existingCode
+        var existingCode = existingBu.GetAttributeValue<string>("atos_codigout");
+        if (existingCode != team.Bu)
         {
             updateEntity["atos_codigout"] = team.Bu;
             updated = true;
-            Console.WriteLine($"Updating atos_codigout for BU '{team.Bu.Trim()}' from '{existingBu.GetAttributeValue<string>("atos_codigout")}' to '{team.Bu}'");
+            await Console.Out.WriteLineAsync(
+                $"Updating atos_codigout for BU '{team.Bu.Trim()}' from '{existingCode ?? "null"}' to '{team.Bu}'");
         }
 
-        var parentBuId = await GetBusinessUnitIdAsync(team.PrimaryCompany);
-        if (existingBu.GetAttributeValue<EntityReference>("parentbusinessunitid").Id != parentBuId)
+        var parentBuId = await GetBusinessUnitIdAsync(team.PrimaryCompany, cancellationToken);
+        if (existingBu.GetAttributeValue<EntityReference>("parentbusinessunitid")?.Id != parentBuId)
         {
             updateEntity["parentbusinessunitid"] = new EntityReference("businessunit", parentBuId);
             updated = true;
-            Console.WriteLine($"Updating parentbusinessunitid for BU '{team.Bu.Trim()}' to '{parentBuId}'");
         }
 
-        var plannerGroupId = await GetPlannerGroupIdAsync(team.PlannerGroup, team.PlannerCenterName);
-        if (plannerGroupId.HasValue && existingBu.GetAttributeValue<EntityReference>("atos_grupoplanificadorid")?.Id != plannerGroupId.Value)
+        var plannerGroupId = await GetPlannerGroupIdAsync(team.PlannerGroup, team.PlannerCenterName, cancellationToken);
+        if (plannerGroupId.HasValue &&
+            existingBu.GetAttributeValue<EntityReference>("atos_grupoplanificadorid")?.Id != plannerGroupId.Value)
         {
             updateEntity["atos_grupoplanificadorid"] = new EntityReference("atos_grupoplanificador", plannerGroupId.Value);
             updated = true;
-            Console.WriteLine($"Updating atos_grupoplanificadorid for BU '{team.Bu.Trim()}' to '{plannerGroupId.Value}'");
         }
 
-        var workCenterId = await GetWorkCenterIdAsync(team.ContractorCode, team.PlannerCenterName);
-        if (workCenterId.HasValue && existingBu.GetAttributeValue<EntityReference>("atos_puestodetrabajoid")?.Id != workCenterId.Value)
+        var workCenterId = await GetWorkCenterIdAsync(team.ContractorCode, team.PlannerCenterName, cancellationToken);
+        if (workCenterId.HasValue &&
+            existingBu.GetAttributeValue<EntityReference>("atos_puestodetrabajoid")?.Id != workCenterId.Value)
         {
             updateEntity["atos_puestodetrabajoid"] = new EntityReference("atos_puestodetrabajo", workCenterId.Value);
             updated = true;
-            Console.WriteLine($"Updating atos_puestodetrabajoid for BU '{team.Bu.Trim()}' to '{workCenterId.Value}'");
         }
 
         if (updated)
         {
-            await Task.Run(() => _serviceClient.Update(updateEntity));
+            await Task.Run(() => _serviceClient.Update(updateEntity), cancellationToken);
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"Business Unit '{team.Bu.Trim()}' updated successfully.");
+            await Console.Out.WriteLineAsync($"Business Unit '{team.Bu.Trim()}' updated successfully.");
             Console.ResetColor();
         }
         else
         {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"Business Unit '{team.Bu.Trim()}' is up to date. No changes needed.");
+            await Console.Out.WriteLineAsync($"Business Unit '{team.Bu.Trim()}' is up to date. No changes needed.");
             Console.ResetColor();
         }
 
         return (true, updated);
     }
 
-    private async Task<bool> CreateNewBusinessUnitAsync(TransformedTeamData team)
+    private async Task<bool> CreateNewBusinessUnitAsync(TransformedTeamData team, CancellationToken cancellationToken)
     {
-        Console.ForegroundColor = ConsoleColor.Blue;
-        Console.WriteLine($"Creating new business unit: ");
-        Console.ResetColor();
-        Console.Write(team.Bu.Trim());
+        ArgumentNullException.ThrowIfNull(team);
 
-        var parentBuId = await GetBusinessUnitIdAsync(team.PrimaryCompany);
-        var plannerGroupId = await GetPlannerGroupIdAsync(team.PlannerGroup, team.PlannerCenterName);
-        var workCenterId = await GetWorkCenterIdAsync(team.ContractorCode, team.PlannerCenterName);
+        Console.ForegroundColor = ConsoleColor.Blue;
+        await Console.Out.WriteLineAsync($"Creating new business unit: {team.Bu.Trim()}");
+        Console.ResetColor();
+
+        var parentBuId = await GetBusinessUnitIdAsync(team.PrimaryCompany, cancellationToken);
+        var plannerGroupId = await GetPlannerGroupIdAsync(team.PlannerGroup, team.PlannerCenterName, cancellationToken);
+        var workCenterId = await GetWorkCenterIdAsync(team.ContractorCode, team.PlannerCenterName, cancellationToken);
 
         if (!plannerGroupId.HasValue || !workCenterId.HasValue)
         {
@@ -163,17 +243,16 @@ public class DataverseBusinessUnitManager
             ["atos_puestodetrabajoid"] = new EntityReference("atos_puestodetrabajo", workCenterId.Value)
         };
 
-        var newBuId = await Task.Run(() => _serviceClient.Create(buEntity));
+        var newBuId = await Task.Run(() => _serviceClient.Create(buEntity), cancellationToken);
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"New business unit created successfully. BU ID:");
+        await Console.Out.WriteLineAsync($"New business unit created successfully. BU ID: {newBuId}");
         Console.ResetColor();
-        Console.Write(newBuId);
 
         return true;
     }
 
-    private async Task<Guid> GetBusinessUnitIdAsync(string businessUnitName)
+    private async Task<Guid> GetBusinessUnitIdAsync(string businessUnitName, CancellationToken cancellationToken)
     {
         var query = new QueryExpression("businessunit")
         {
@@ -184,7 +263,7 @@ public class DataverseBusinessUnitManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
         if (result.Entities.Count == 0)
         {
             throw new Exception($"Business Unit not found: {businessUnitName}");
@@ -193,7 +272,7 @@ public class DataverseBusinessUnitManager
         return result.Entities[0].Id;
     }
 
-    private async Task<Guid?> GetPlannerGroupIdAsync(string plannerGroupCode, string planningCenterName)
+    private async Task<Guid?> GetPlannerGroupIdAsync(string plannerGroupCode, string planningCenterName, CancellationToken cancellationToken)
     {
         var query = new QueryExpression("atos_grupoplanificador")
         {
@@ -227,7 +306,7 @@ public class DataverseBusinessUnitManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
 
         if (result.Entities.Count == 0)
         {
@@ -243,7 +322,7 @@ public class DataverseBusinessUnitManager
         return result.Entities[0].Id;
     }
 
-    private async Task<Guid?> GetWorkCenterIdAsync(string contractorCode, string planningCenterName)
+    private async Task<Guid?> GetWorkCenterIdAsync(string contractorCode, string planningCenterName, CancellationToken cancellationToken)
     {
         var query = new QueryExpression("atos_puestodetrabajo")
         {
@@ -277,7 +356,7 @@ public class DataverseBusinessUnitManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
 
         if (result.Entities.Count == 0)
         {
@@ -292,11 +371,4 @@ public class DataverseBusinessUnitManager
 
         return result.Entities[0].Id;
     }
-}
-
-public class BuCreationResult
-{
-    public string BuName { get; set; }
-    public bool Exists { get; set; }
-    public bool WasUpdated { get; set; }
 }

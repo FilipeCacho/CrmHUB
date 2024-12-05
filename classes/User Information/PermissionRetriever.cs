@@ -52,7 +52,7 @@ using Microsoft.Xrm.Sdk.Query;
             }
         }
 
-        private async Task<List<Entity>> FindUsersAsync(string searchText)
+        public async Task<List<Entity>> FindUsersAsync(string searchText)
         {
             var query = new QueryExpression("systemuser")
             {

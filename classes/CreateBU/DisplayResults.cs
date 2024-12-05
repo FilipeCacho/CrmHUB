@@ -1,6 +1,7 @@
 ﻿public static class ResultsDisplay
 {
-    public static void DisplayResults(List<BuCreationResult> buResults,
+    public static void DisplayResults(
+        List<CreateBu.BuCreationResult> buResults,
         List<TeamOperationResult> standardTeamResults,
         List<TeamOperationResult> proprietaryTeamResults)
     {

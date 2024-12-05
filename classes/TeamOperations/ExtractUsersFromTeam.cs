@@ -2,16 +2,15 @@
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
 using ClosedXML.Excel;
-using System.Net;
 
 public static class ExtractUsersFromTeam
 {
     public static async Task<List<TransformedTeamData>> FormatTeamData()
     {
-        List<TransformedTeamData> dynamicTeams = new List<TransformedTeamData>();
+        List<TransformedTeamData> dynamicTeams = new();
         List<TeamRow> validTeams = ExcelReader.ValidateTeamsToCreate();
 
-        if (validTeams.Count == 0)
+        if (validTeams is null || validTeams.Count == 0)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("\nNo valid teams found to process.");
@@ -21,19 +20,46 @@ public static class ExtractUsersFromTeam
 
         foreach (var team in validTeams)
         {
-            string bu = FormatBusinessUnitName(team);
-            string buWithoutContractor = bu[..bu.LastIndexOf(' ')];
+            // Get the base BU name
+            string baseBuName = team.ColumnA; 
+
+            // Add Contrata to the base name
+            string buWithContrata = $"{baseBuName} Contrata"; 
+
+            // Create the full team name
+            string teamName = $"Equipo contrata {baseBuName} Contrata"; 
+
+            // Create the full BU name with contractor code
+            string fullBuName = $"{baseBuName} Contrata {team.ColumnB}"; 
 
             dynamicTeams.Add(new TransformedTeamData
             {
-                Bu = buWithoutContractor,
-                EquipaContrataContrata = $"Equipo contrata {buWithoutContractor}".Trim(),
-                FileName = team.ColumnA,
-                FullBuName = bu
+                Bu = buWithContrata,                    
+                EquipaContrataContrata = teamName,      
+                FileName = baseBuName,                  
+                FullBuName = fullBuName,               
+                EquipaContrata = null,
+                ContractorCode = null,
+                EquipaEDPR = null,
+                PlannerGroup = null,
+                PlannerCenterName = null,
+                PrimaryCompany = null,
+                Contractor = null
             });
         }
 
-        DisplayTransformedTeamData(dynamicTeams);
+        // Display the transformed data for verification
+        foreach (var team in dynamicTeams)
+        {
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine("\nTransformed Team Data:");
+            Console.ResetColor();
+            Console.WriteLine($"bu: {team.Bu}");
+            Console.WriteLine($"Equipa contrata Contrata: {team.EquipaContrataContrata}");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"Users will be stored in the file: {team.FileName}.xls\n");
+            Console.ResetColor();
+        }
 
         if (!GetUserConfirmation())
         {
@@ -59,43 +85,97 @@ public static class ExtractUsersFromTeam
         List<TransformedTeamData> validTeams = new();
         bool hasInvalidTeams = false;
 
+        Console.WriteLine("\nStarting team validation process...");
+
         foreach (var team in teams)
         {
-            bool buExists = await CheckBusinessUnitExistsAsync(serviceClient, team.Bu);
-            bool teamExists = await CheckTeamExistsAsync(serviceClient, team.EquipaContrataContrata);
+            // Get the base BU name and team name for validation
+            string baseBuName = team.FileName; 
+            string teamName = $"Equipo contrata {baseBuName}"; 
 
+            Console.WriteLine("\nValidating team:");
+            Console.WriteLine($"Base BU name to validate: {baseBuName}");
+            Console.WriteLine($"Team name to validate: {teamName}");
+
+            // Check if both BU and Team exist in Dynamics
+            bool buExists = await CheckBusinessUnitExistsAsync(serviceClient, baseBuName);
+            bool teamExists = await CheckTeamExistsAsync(serviceClient, teamName);
+
+            Console.WriteLine($"Validation results:");
+            Console.WriteLine($"BU '{baseBuName}' exists: {buExists}");
+            Console.WriteLine($"Team '{teamName}' exists: {teamExists}");
+
+            // Handle case where BU doesn't exist
             if (!buExists)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"\nBusiness Unit '{team.Bu}' not found in Dynamics.");
+                Console.WriteLine($"\nBusiness Unit '{baseBuName}' not found in Dynamics.");
                 Console.ResetColor();
                 hasInvalidTeams = true;
+                continue;
             }
 
+            // Handle case where Team doesn't exist
             if (!teamExists)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"\nTeam '{team.EquipaContrataContrata}' not found in Dynamics.");
+                Console.WriteLine($"\nTeam '{teamName}' not found in Dynamics.");
                 Console.ResetColor();
                 hasInvalidTeams = true;
+                continue;
             }
 
-            if (buExists && teamExists)
+            // If both exist, add to valid teams
+            validTeams.Add(new TransformedTeamData
             {
-                validTeams.Add(team);
-            }
+                Bu = baseBuName,  
+                EquipaContrata = team.EquipaContrata,
+                ContractorCode = team.ContractorCode,
+                EquipaEDPR = team.EquipaEDPR,
+                PlannerGroup = team.PlannerGroup,
+                PlannerCenterName = team.PlannerCenterName,
+                PrimaryCompany = team.PrimaryCompany,
+                Contractor = team.Contractor,
+                EquipaContrataContrata = teamName, 
+                FileName = team.FileName,
+                FullBuName = team.FullBuName
+            });
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"Team validated successfully and added to valid teams list");
+            Console.WriteLine($"Added: BU='{baseBuName}', Team='{teamName}'");
+            Console.ResetColor();
         }
 
+        // Display summary of validation
         if (hasInvalidTeams)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"\nProcessing will continue with {validTeams.Count} valid team(s).");
+            Console.WriteLine($"\nValidation complete. Processing will continue with {validTeams.Count} valid team(s).");
             Console.ResetColor();
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"\nValidation complete. All {validTeams.Count} teams are valid.");
+            Console.ResetColor();
+        }
+
+        // Display final list of valid teams
+        if (validTeams.Any())
+        {
+            Console.WriteLine("\nValid teams after validation:");
+            foreach (var team in validTeams)
+            {
+                Console.WriteLine($"BU: {team.Bu}");
+                Console.WriteLine($"Team: {team.EquipaContrataContrata}");
+                Console.WriteLine($"FileName: {team.FileName}");
+                Console.WriteLine("---");
+            }
         }
 
         return validTeams;
     }
-
     private static async Task<bool> CheckBusinessUnitExistsAsync(ServiceClient service, string businessUnitName)
     {
         var query = new QueryExpression("businessunit")
@@ -133,6 +213,21 @@ public static class ExtractUsersFromTeam
 
             foreach (var team in transformedBus)
             {
+                Console.WriteLine("\nProcessing team for Excel creation:");
+                Console.WriteLine($"Bu: {team.Bu}");  
+                Console.WriteLine($"Team: {team.EquipaContrataContrata}");  
+                Console.WriteLine($"FileName: {team.FileName}");
+
+                if (string.IsNullOrEmpty(team.FileName) || string.IsNullOrEmpty(team.EquipaContrataContrata))
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("Warning: Missing required data for team processing");
+                    Console.WriteLine($"FileName present: {!string.IsNullOrEmpty(team.FileName)}");
+                    Console.WriteLine($"Team name present: {!string.IsNullOrEmpty(team.EquipaContrataContrata)}");
+                    Console.ResetColor();
+                    continue;
+                }
+
                 var allUsers = await RetrieveAllUsersAsync(serviceClient, team);
                 var buUserDomains = CreateBuUserDomains(allUsers, team);
                 result.Add(buUserDomains);
@@ -154,10 +249,13 @@ public static class ExtractUsersFromTeam
         return result;
     }
 
+
     private static string FormatBusinessUnitName(TeamRow team)
     {
+        if (team == null) return string.Empty;
+
         string bu = team.ColumnA;
-        if (team.ColumnC != "ZP1")
+        if (!string.IsNullOrEmpty(team.ColumnC) && team.ColumnC != "ZP1")
         {
             bu += $" {team.ColumnC}";
         }
@@ -171,8 +269,8 @@ public static class ExtractUsersFromTeam
             Console.ForegroundColor = ConsoleColor.Blue;
             Console.WriteLine("\nTransformed Team Data:");
             Console.ResetColor();
-            Console.WriteLine($"bu: {team.Bu}");
-            Console.WriteLine($"Equipa contrata Contrata: {team.EquipaContrataContrata}");
+            Console.WriteLine($"bu: {team.Bu}");  
+            Console.WriteLine($"Equipa contrata Contrata: {team.EquipaContrataContrata}"); 
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Users will be stored in the file: {team.FileName}.xls\n");
             Console.ResetColor();
@@ -223,16 +321,35 @@ public static class ExtractUsersFromTeam
         return excelFolderPath;
     }
 
-    private static async Task<List<UserData>> RetrieveAllUsersAsync(ServiceClient serviceClient, TransformedTeamData team)
+    public static async Task<List<UserData>> RetrieveAllUsersAsync(ServiceClient service, TransformedTeamData team)
     {
-        List<UserData> usersFromBu = await RetrieveUsersFromBuAsync(serviceClient, team.Bu);
-        List<UserData> usersFromTeam = await RetrieveUsersFromTeamAsync(serviceClient, team.EquipaContrataContrata);
+        // Use the names directly as they already include "Contrata"
+        string buName = team.Bu;  
+        string teamName = team.EquipaContrataContrata;  
 
-        return usersFromBu.Concat(usersFromTeam)
-                         .GroupBy(u => u.YomiFullName)
-                         .Select(g => g.First())
-                         .ToList();
+        Console.WriteLine($"\nProcessing team:");
+        Console.WriteLine($"BU to search: {buName}");
+        Console.WriteLine($"Team to search: {teamName}");
+
+        // Get users from the BU with correct name
+        List<UserData> usersFromBu = await RetrieveUsersFromBuAsync(service, buName);
+        Console.WriteLine($"Retrieved {usersFromBu.Count} users from BU {buName}");
+
+        // Get users from the Team with correct name
+        List<UserData> usersFromTeam = await RetrieveUsersFromTeamAsync(service, teamName);
+        Console.WriteLine($"Retrieved {usersFromTeam.Count} users from Team {teamName}");
+
+        // Combine and deduplicate users
+        var allUsers = usersFromBu.Concat(usersFromTeam)
+                                .GroupBy(u => u.YomiFullName)
+                                .Select(g => g.First())
+                                .ToList();
+
+        Console.WriteLine($"Total unique users: {allUsers.Count}");
+        return allUsers;
     }
+
+
 
     private static BuUserDomains CreateBuUserDomains(List<UserData> allUsers, TransformedTeamData team)
     {
@@ -250,7 +367,10 @@ public static class ExtractUsersFromTeam
             ColumnSet = new ColumnSet("businessunitid"),
             Criteria = new FilterExpression
             {
-                Conditions = { new ConditionExpression("name", ConditionOperator.Equal, businessUnitName) }
+                Conditions =
+            {
+                new ConditionExpression("name", ConditionOperator.Equal, businessUnitName)
+            }
             }
         };
 
@@ -285,6 +405,12 @@ public static class ExtractUsersFromTeam
 
     private static async Task<List<UserData>> RetrieveUsersFromTeamAsync(ServiceClient service, string teamName)
     {
+        if (string.IsNullOrEmpty(teamName))
+        {
+            Console.WriteLine("Warning: Team name is null or empty.");
+            return new List<UserData>();
+        }
+
         var teamQuery = new QueryExpression("team")
         {
             ColumnSet = new ColumnSet("teamid"),
@@ -317,9 +443,9 @@ public static class ExtractUsersFromTeam
         buLink.Columns = new ColumnSet("name");
         buLink.EntityAlias = "bu";
 
-        var userResults = await Task.Run(() => service.RetrieveMultiple(userQuery));
+        var results = await Task.Run(() => service.RetrieveMultiple(userQuery));
 
-        return userResults.Entities.Select(e => new UserData
+        return results.Entities.Select(e => new UserData
         {
             YomiFullName = e.GetAttributeValue<string>("yomifullname"),
             DomainName = e.GetAttributeValue<string>("domainname"),
@@ -330,6 +456,12 @@ public static class ExtractUsersFromTeam
 
     public static async Task CreateExcelFileAsync(List<UserData> users, string fileName, string folderPath)
     {
+        if (string.IsNullOrEmpty(fileName))
+        {
+            Console.WriteLine("Warning: Filename is empty");
+            return;
+        }
+
         string filePath = Path.Combine(folderPath, $"{fileName}.xlsx");
 
         await Task.Run(() =>
@@ -362,6 +494,6 @@ public static class ExtractUsersFromTeam
         Console.ForegroundColor = ConsoleColor.Green;
         Console.Write($"\nExcel file created successfully at ");
         Console.ResetColor();
-        Console.Write(filePath);
+        Console.WriteLine(filePath);
     }
 }

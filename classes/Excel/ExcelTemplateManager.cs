@@ -26,7 +26,7 @@ using OfficeOpenXml;
             if (ExcelFileExists())
             {
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"Excel file found at: {filePath} \n");
+                Console.WriteLine($"Excel file found at: {filePath}");
                 Console.ForegroundColor = ConsoleColor.Blue;
                 return true;
             }
@@ -86,7 +86,6 @@ using OfficeOpenXml;
                         }
                     }
 
-                    // Add more specific validations here if needed
 
                     return true;
                 }

@@ -3,21 +3,32 @@ using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
 using Microsoft.Xrm.Sdk;
+using System.Collections.Concurrent;
 
+// Base abstract class for team types
 public abstract class BaseTeam
 {
-    public string TeamName { get; protected set; }
-    public string BusinessUnitName { get; protected set; }
-    public string AdministratorName { get; protected set; }
-    public string[] TeamRoles { get; protected set; }
+    public string TeamName { get; set; } = string.Empty;
+    public string BusinessUnitName { get; set; } = string.Empty;
+    public string AdministratorName { get; set; } = string.Empty;
+    public string[] TeamRoles { get; set; }
+
+    protected BaseTeam()
+    {
+        // Initialize arrays to empty to avoid null reference issues
+        TeamRoles = Array.Empty<string>();
+    }
 
     public abstract void SetTeamProperties(TransformedTeamData teamData);
 }
 
-public class ProprietaryTeam : BaseTeam
+// Concrete implementation for proprietary teams
+public sealed class ProprietaryTeam : BaseTeam
 {
     public override void SetTeamProperties(TransformedTeamData teamData)
     {
+        ArgumentNullException.ThrowIfNull(teamData);
+
         TeamName = teamData.EquipaEDPR;
         BusinessUnitName = teamData.Bu;
         AdministratorName = CodesAndRoles.AdministratorNameEU;
@@ -25,10 +36,13 @@ public class ProprietaryTeam : BaseTeam
     }
 }
 
-public class StandardTeam : BaseTeam
+// Concrete implementation for standard teams
+public sealed class StandardTeam : BaseTeam
 {
     public override void SetTeamProperties(TransformedTeamData teamData)
     {
+        ArgumentNullException.ThrowIfNull(teamData);
+
         TeamName = teamData.EquipaContrata;
         BusinessUnitName = teamData.Bu;
         AdministratorName = CodesAndRoles.AdministratorNameEU;
@@ -36,7 +50,17 @@ public class StandardTeam : BaseTeam
     }
 }
 
-public class TeamManager
+// Record type for operation results
+public sealed record TeamOperationResult
+{
+    public required string TeamName { get; init; }
+    public required bool Exists { get; init; }
+    public required bool WasUpdated { get; init; }
+    public required string BuName { get; init; }
+    public bool Cancelled { get; init; }
+}
+
+public sealed class TeamManager
 {
     private readonly ServiceClient _serviceClient;
 
@@ -45,31 +69,39 @@ public class TeamManager
         _serviceClient = SessionManager.Instance.GetClient();
     }
 
-    public async Task<TeamOperationResult> CreateOrUpdateTeamAsync(BaseTeam team, bool isProprietaryTeam)
+    public async Task<TeamOperationResult> CreateOrUpdateTeamAsync(
+        BaseTeam team,
+        bool isProprietaryTeam,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(team);
+
         string teamType = isProprietaryTeam ? "Proprietary" : "Standard";
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write($"\nStarting {teamType} team creation/update process for team: ");
+        await Console.Out.WriteAsync($"\nStarting {teamType} team creation/update process for team: ");
         Console.ResetColor();
-        Console.Write(team.TeamName.Trim() + "\n");
+        await Console.Out.WriteLineAsync(team.TeamName.Trim());
 
-        var existingTeam = await GetExistingTeamAsync(team.TeamName.Trim());
-        if (existingTeam != null)
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var existingTeam = await GetExistingTeamAsync(team.TeamName.Trim(), cancellationToken);
+        if (existingTeam is not null)
         {
+            // Check if team type matches
             bool isCorrectType = (isProprietaryTeam && existingTeam.GetAttributeValue<OptionSetValue>("teamtype").Value == 0) ||
-                                 (!isProprietaryTeam && existingTeam.GetAttributeValue<OptionSetValue>("teamtype").Value == 0);
+                                (!isProprietaryTeam && existingTeam.GetAttributeValue<OptionSetValue>("teamtype").Value == 0);
 
             if (!isCorrectType)
             {
-                await DeleteTeamAsync(existingTeam.Id);
-                return await CreateNewTeamAsync(team, isProprietaryTeam);
+                await DeleteTeamAsync(existingTeam.Id, cancellationToken);
+                return await CreateNewTeamAsync(team, isProprietaryTeam, cancellationToken);
             }
-            return await UpdateTeamIfNeededAsync(existingTeam, team, isProprietaryTeam);
+            return await UpdateTeamIfNeededAsync(existingTeam, team, isProprietaryTeam, cancellationToken);
         }
-        return await CreateNewTeamAsync(team, isProprietaryTeam);
+        return await CreateNewTeamAsync(team, isProprietaryTeam, cancellationToken);
     }
 
-    private async Task<Entity> GetExistingTeamAsync(string teamName)
+    private async Task<Entity?> GetExistingTeamAsync(string teamName, CancellationToken cancellationToken)
     {
         var query = new QueryExpression("team")
         {
@@ -80,60 +112,78 @@ public class TeamManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
-        return result.Entities.Count > 0 ? result.Entities[0] : null;
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
+        return result.Entities.FirstOrDefault();
     }
 
-    private async Task DeleteTeamAsync(Guid teamId)
+    private async Task DeleteTeamAsync(Guid teamId, CancellationToken cancellationToken)
     {
-        await Task.Run(() => _serviceClient.Delete("team", teamId));
-        Console.WriteLine($"Deleted existing team with incorrect type. Team ID: {teamId}");
+        await Task.Run(() => _serviceClient.Delete("team", teamId), cancellationToken);
+        await Console.Out.WriteLineAsync($"Deleted existing team with incorrect type. Team ID: {teamId}");
     }
 
-    private async Task<TeamOperationResult> UpdateTeamIfNeededAsync(Entity existingTeam, BaseTeam team, bool isProprietaryTeam)
+    private async Task<TeamOperationResult> UpdateTeamIfNeededAsync(
+        Entity existingTeam,
+        BaseTeam team,
+        bool isProprietaryTeam,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(existingTeam);
+        ArgumentNullException.ThrowIfNull(team);
+
         bool updated = false;
         var updateEntity = new Entity("team") { Id = existingTeam.Id };
 
-        var businessUnitId = await GetBusinessUnitIdAsync(team.BusinessUnitName);
+        var businessUnitId = await GetBusinessUnitIdAsync(team.BusinessUnitName, cancellationToken);
         if (existingTeam.GetAttributeValue<EntityReference>("businessunitid").Id != businessUnitId)
         {
             updateEntity["businessunitid"] = new EntityReference("businessunit", businessUnitId);
             updated = true;
-            Console.WriteLine($"Updating businessunitid for team '{team.TeamName.Trim()}' to '{businessUnitId}'");
+            await Console.Out.WriteLineAsync($"Updating businessunitid for team '{team.TeamName.Trim()}' to '{businessUnitId}'");
         }
 
-        var administratorId = await GetUserIdAsync(team.AdministratorName);
+        var administratorId = await GetUserIdAsync(team.AdministratorName, cancellationToken);
         if (existingTeam.GetAttributeValue<EntityReference>("administratorid").Id != administratorId)
         {
             updateEntity["administratorid"] = new EntityReference("systemuser", administratorId);
             updated = true;
-            Console.WriteLine($"Updating administratorid for team '{team.TeamName.Trim()}' to '{administratorId}'");
+            await Console.Out.WriteLineAsync($"Updating administratorid for team '{team.TeamName.Trim()}' to '{administratorId}'");
         }
 
         if (updated)
         {
-            await Task.Run(() => _serviceClient.Update(updateEntity));
-            Console.WriteLine($"Team '{team.TeamName.Trim()}' updated successfully.");
+            await Task.Run(() => _serviceClient.Update(updateEntity), cancellationToken);
+            await Console.Out.WriteLineAsync($"Team '{team.TeamName.Trim()}' updated successfully.");
         }
 
         if (isProprietaryTeam)
         {
-            updated |= await UpdateTeamRolesIfNeededAsync(existingTeam.Id, team.TeamRoles, businessUnitId);
-            await UpdateBusinessUnitWithProprietaryTeamAsync(businessUnitId, existingTeam.Id, team.TeamName.Trim());
+            updated |= await UpdateTeamRolesIfNeededAsync(existingTeam.Id, team.TeamRoles, businessUnitId, cancellationToken);
+            await UpdateBusinessUnitWithProprietaryTeamAsync(businessUnitId, existingTeam.Id, team.TeamName.Trim(), cancellationToken);
         }
         else
         {
-            updated |= await UpdateTeamRolesIfNeededAsync(existingTeam.Id, team.TeamRoles, businessUnitId);
+            updated |= await UpdateTeamRolesIfNeededAsync(existingTeam.Id, team.TeamRoles, businessUnitId, cancellationToken);
         }
 
-        return new TeamOperationResult { TeamName = team.TeamName, Exists = true, WasUpdated = updated };
+        return new TeamOperationResult
+        {
+            TeamName = team.TeamName,
+            Exists = true,
+            WasUpdated = updated,
+            BuName = team.BusinessUnitName
+        };
     }
 
-    private async Task<TeamOperationResult> CreateNewTeamAsync(BaseTeam team, bool isProprietaryTeam)
+    private async Task<TeamOperationResult> CreateNewTeamAsync(
+        BaseTeam team,
+        bool isProprietaryTeam,
+        CancellationToken cancellationToken)
     {
-        var businessUnitId = await GetBusinessUnitIdAsync(team.BusinessUnitName);
-        var administratorId = await GetUserIdAsync(team.AdministratorName);
+        ArgumentNullException.ThrowIfNull(team);
+
+        var businessUnitId = await GetBusinessUnitIdAsync(team.BusinessUnitName, cancellationToken);
+        var administratorId = await GetUserIdAsync(team.AdministratorName, cancellationToken);
 
         var teamEntity = new Entity("team")
         {
@@ -143,25 +193,35 @@ public class TeamManager
             ["teamtype"] = new OptionSetValue(0)
         };
 
-        var newTeamId = await Task.Run(() => _serviceClient.Create(teamEntity));
+        var newTeamId = await Task.Run(() => _serviceClient.Create(teamEntity), cancellationToken);
 
-        Console.WriteLine($"New team created successfully. Team ID: {newTeamId}");
-        Console.WriteLine($"Administrator '{team.AdministratorName}' assigned to team.");
+        await Console.Out.WriteLineAsync($"New team created successfully. Team ID: {newTeamId}");
+        await Console.Out.WriteLineAsync($"Administrator '{team.AdministratorName}' assigned to team.");
 
         if (team.TeamRoles?.Length > 0)
         {
-            await AssignRolesToTeamAsync(newTeamId, businessUnitId, team.TeamRoles);
+            await AssignRolesToTeamAsync(newTeamId, businessUnitId, team.TeamRoles, cancellationToken);
         }
 
         if (isProprietaryTeam)
         {
-            await UpdateBusinessUnitWithProprietaryTeamAsync(businessUnitId, newTeamId, team.TeamName.Trim());
+            await UpdateBusinessUnitWithProprietaryTeamAsync(businessUnitId, newTeamId, team.TeamName.Trim(), cancellationToken);
         }
 
-        return new TeamOperationResult { TeamName = team.TeamName, Exists = true, WasUpdated = false };
+        return new TeamOperationResult
+        {
+            TeamName = team.TeamName,
+            Exists = true,
+            WasUpdated = false,
+            BuName = team.BusinessUnitName
+        };
     }
 
-    private async Task UpdateBusinessUnitWithProprietaryTeamAsync(Guid businessUnitId, Guid proprietaryTeamId, string proprietaryTeamName)
+    private async Task UpdateBusinessUnitWithProprietaryTeamAsync(
+        Guid businessUnitId,
+        Guid proprietaryTeamId,
+        string proprietaryTeamName,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -171,20 +231,24 @@ public class TeamManager
                 ["atos_equipopropietarioidname"] = proprietaryTeamName
             };
 
-            await Task.Run(() => _serviceClient.Update(businessUnitUpdate));
-            Console.WriteLine($"Business Unit updated with Proprietary Team information.");
+            await Task.Run(() => _serviceClient.Update(businessUnitUpdate), cancellationToken);
+            await Console.Out.WriteLineAsync("Business Unit updated with Proprietary Team information.");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error updating Business Unit with Proprietary Team: {ex.Message}");
+            await Console.Out.WriteLineAsync($"Error updating Business Unit with Proprietary Team: {ex.Message}");
         }
     }
 
-    private async Task<bool> UpdateTeamRolesIfNeededAsync(Guid teamId, string[] desiredRoles, Guid businessUnitId)
+    private async Task<bool> UpdateTeamRolesIfNeededAsync(
+        Guid teamId,
+        string[] desiredRoles,
+        Guid businessUnitId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var currentRoles = await GetTeamRolesAsync(teamId);
+            var currentRoles = await GetTeamRolesAsync(teamId, cancellationToken);
             var desiredRoleSet = new HashSet<string>(desiredRoles ?? Array.Empty<string>());
             var currentRoleSet = new HashSet<string>(currentRoles.Select(r => r.GetAttributeValue<string>("name")));
 
@@ -193,24 +257,22 @@ public class TeamManager
 
             bool updated = false;
 
-            // Process roles to add
             foreach (var roleName in rolesToAdd)
             {
-                var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId);
+                var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId, cancellationToken);
                 if (roleInfo.HasValue)
                 {
-                    await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName);
+                    await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName, cancellationToken);
                     updated = true;
                 }
             }
 
-            // Process roles to remove
             foreach (var roleName in rolesToRemove)
             {
                 var roleToRemove = currentRoles.FirstOrDefault(r => r.GetAttributeValue<string>("name") == roleName);
-                if (roleToRemove != null)
+                if (roleToRemove is not null)
                 {
-                    await RemoveRoleFromTeamAsync(teamId, roleToRemove.Id, roleName);
+                    await RemoveRoleFromTeamAsync(teamId, roleToRemove.Id, roleName, cancellationToken);
                     updated = true;
                 }
             }
@@ -220,25 +282,32 @@ public class TeamManager
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Warning: Error updating team roles: {ex.Message}");
+            await Console.Out.WriteLineAsync($"Warning: Error updating team roles: {ex.Message}");
             Console.ResetColor();
             return false;
         }
     }
 
-    private async Task AssignRolesToTeamAsync(Guid teamId, Guid businessUnitId, string[] roleNames)
+    private async Task AssignRolesToTeamAsync(
+        Guid teamId,
+        Guid businessUnitId,
+        string[] roleNames,
+        CancellationToken cancellationToken)
     {
         foreach (var roleName in roleNames)
         {
-            var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId);
+            var roleInfo = await GetRoleInfoAsync(roleName, businessUnitId, cancellationToken);
             if (roleInfo.HasValue)
             {
-                await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName);
+                await AssignRoleToTeamAsync(teamId, roleInfo.Value.roleId, roleInfo.Value.roleName, cancellationToken);
             }
         }
     }
 
-    private async Task<(Guid roleId, string roleName)?> GetRoleInfoAsync(string roleName, Guid businessUnitId)
+    private async Task<(Guid roleId, string roleName)?> GetRoleInfoAsync(
+        string roleName,
+        Guid businessUnitId,
+        CancellationToken cancellationToken)
     {
         var query = new QueryExpression("role")
         {
@@ -252,10 +321,10 @@ public class TeamManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
         if (result.Entities.Count == 0)
         {
-            Console.WriteLine($"Role not found: {roleName}");
+            await Console.Out.WriteLineAsync($"Role not found: {roleName}");
             return null;
         }
 
@@ -263,11 +332,14 @@ public class TeamManager
         return (role.Id, role.GetAttributeValue<string>("name"));
     }
 
-    private async Task AssignRoleToTeamAsync(Guid teamId, Guid roleId, string roleName)
+    private async Task AssignRoleToTeamAsync(
+        Guid teamId,
+        Guid roleId,
+        string roleName,
+        CancellationToken cancellationToken)
     {
         try
         {
-            // Create an associate request to link the team with the role
             var associateRequest = new AssociateRequest
             {
                 Target = new EntityReference("team", teamId),
@@ -275,22 +347,25 @@ public class TeamManager
                 {
                     new EntityReference("role", roleId)
                 },
-                // Specify the N:N relationship name between team and role
                 Relationship = new Relationship("teamroles_association")
             };
 
-            await Task.Run(() => _serviceClient.Execute(associateRequest));
-            Console.WriteLine($"Role '{roleName}' assigned to team successfully.");
+            await Task.Run(() => _serviceClient.Execute(associateRequest), cancellationToken);
+            await Console.Out.WriteLineAsync($"Role '{roleName}' assigned to team successfully.");
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Warning: Error assigning role '{roleName}' to team: {ex.Message}");
+            await Console.Out.WriteLineAsync($"Warning: Error assigning role '{roleName}' to team: {ex.Message}");
             Console.ResetColor();
         }
     }
 
-    private async Task RemoveRoleFromTeamAsync(Guid teamId, Guid roleId, string roleName)
+    private async Task RemoveRoleFromTeamAsync(
+        Guid teamId,
+        Guid roleId,
+        string roleName,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -304,40 +379,21 @@ public class TeamManager
                 Relationship = new Relationship("teamroles_association")
             };
 
-            await Task.Run(() => _serviceClient.Execute(disassociateRequest));
-            Console.WriteLine($"Role '{roleName}' removed from team.");
+            await Task.Run(() => _serviceClient.Execute(disassociateRequest), cancellationToken);
+            await Console.Out.WriteLineAsync($"Role '{roleName}' removed from team.");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error removing role '{roleName}' from team: {ex.Message}");
+            await Console.Out.WriteLineAsync($"Error removing role '{roleName}' from team: {ex.Message}");
         }
     }
 
-    private async Task<Guid> GetUserIdAsync(string fullName)
-    {
-        var query = new QueryExpression("systemuser")
-        {
-            ColumnSet = new ColumnSet("systemuserid"),
-            Criteria = new FilterExpression
-            {
-                Conditions = { new ConditionExpression("fullname", ConditionOperator.Equal, fullName) }
-            }
-        };
-
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
-        if (result.Entities.Count == 0)
-        {
-            throw new Exception($"User not found: {fullName}");
-        }
-
-        return result.Entities[0].Id;
-    }
-
-    private async Task<List<Entity>> GetTeamRolesAsync(Guid teamId)
+    private async Task<List<Entity>> GetTeamRolesAsync(
+        Guid teamId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            // Query to get all roles associated with the team
             var query = new QueryExpression("role")
             {
                 ColumnSet = new ColumnSet("roleid", "name"),
@@ -361,19 +417,21 @@ public class TeamManager
                 }
             };
 
-            var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+            var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
             return result.Entities.ToList();
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Warning: Error retrieving team roles: {ex.Message}");
+            await Console.Out.WriteLineAsync($"Warning: Error retrieving team roles: {ex.Message}");
             Console.ResetColor();
             return new List<Entity>();
         }
     }
 
-    private async Task<Guid> GetBusinessUnitIdAsync(string businessUnitName)
+    private async Task<Guid> GetBusinessUnitIdAsync(
+        string businessUnitName,
+        CancellationToken cancellationToken)
     {
         var query = new QueryExpression("businessunit")
         {
@@ -384,10 +442,32 @@ public class TeamManager
             }
         };
 
-        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query));
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
         if (result.Entities.Count == 0)
         {
             throw new Exception($"Business Unit not found: {businessUnitName}");
+        }
+
+        return result.Entities[0].Id;
+    }
+
+    private async Task<Guid> GetUserIdAsync(
+        string fullName,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryExpression("systemuser")
+        {
+            ColumnSet = new ColumnSet("systemuserid"),
+            Criteria = new FilterExpression
+            {
+                Conditions = { new ConditionExpression("fullname", ConditionOperator.Equal, fullName) }
+            }
+        };
+
+        var result = await Task.Run(() => _serviceClient.RetrieveMultiple(query), cancellationToken);
+        if (result.Entities.Count == 0)
+        {
+            throw new Exception($"User not found: {fullName}");
         }
 
         return result.Entities[0].Id;
@@ -396,42 +476,105 @@ public class TeamManager
 
 public class CreateTeam
 {
-    public static async Task<List<TeamOperationResult>> RunAsync(List<TransformedTeamData> transformedTeams, TeamType teamType)
+    public static async Task<List<TeamOperationResult>> RunAsync(
+        List<TransformedTeamData> transformedTeams,
+        TeamType teamType)
     {
-        var results = new List<TeamOperationResult>();
+        // Display warning and wait for user confirmation
+        Console.WriteLine("Press any key to start the team creation process. Press 'q' at any time to cancel.");
+        Console.WriteLine("Note: Cancellation will complete the current team operation before stopping.");
+        Console.ReadKey(true);
+
+        // Create cancellation token source that will be triggered when 'q' is pressed
+        using var cts = new CancellationTokenSource();
+        var results = new ConcurrentBag<TeamOperationResult>();
+
+        // Start key monitoring task
+        _ = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
+                {
+                    cts.Cancel();
+                    Console.WriteLine("\nCancellation requested. Completing current operation...");
+                    break;
+                }
+            }
+        });
+
         try
         {
             var teamManager = new TeamManager();
 
-            foreach (var team in transformedTeams)
-            {
-                try
+            // Process teams with parallel execution for better performance
+            await Parallel.ForEachAsync(transformedTeams,
+                new ParallelOptions
                 {
-                    BaseTeam baseTeam = teamType == TeamType.Proprietary
-                        ? new ProprietaryTeam()
-                        : new StandardTeam();
-
-                    baseTeam.SetTeamProperties(team);
-
-                    var result = await teamManager.CreateOrUpdateTeamAsync(baseTeam, teamType == TeamType.Proprietary);
-                    result.BuName = team.Bu;
-                    results.Add(result);
-
-                    Console.WriteLine($"{teamType} Team '{result.TeamName}' {(result.Exists ? (result.WasUpdated ? "updated" : "already exists") : "created")}.");
-                }
-                catch (Exception ex)
+                    MaxDegreeOfParallelism = 3,
+                    CancellationToken = cts.Token
+                },
+                async (team, token) =>
                 {
-                    Console.WriteLine($"Error processing {teamType} Team for '{team.Bu}': {ex.Message}");
-                }
+                    try
+                    {
+                        // Create appropriate team type using pattern matching
+                        BaseTeam baseTeam = teamType switch
+                        {
+                            TeamType.Proprietary => new ProprietaryTeam(),
+                            TeamType.Standard => new StandardTeam(),
+                            _ => throw new ArgumentException($"Unsupported team type: {teamType}")
+                        };
 
-                await Task.Delay(500);
-            }
+                        baseTeam.SetTeamProperties(team);
+
+                        var result = await teamManager.CreateOrUpdateTeamAsync(baseTeam, teamType == TeamType.Proprietary, token);
+                        results.Add(result with { BuName = team.Bu });
+
+                        await Console.Out.WriteLineAsync(
+                            $"{teamType} Team '{result.TeamName}' " +
+                            $"{(result.Exists ? (result.WasUpdated ? "updated" : "already exists") : "created")}.");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        results.Add(new TeamOperationResult
+                        {
+                            TeamName = team.Bu,
+                            Exists = false,
+                            WasUpdated = false,
+                            BuName = team.Bu,
+                            Cancelled = true
+                        });
+                        await Console.Out.WriteLineAsync($"Operation cancelled for Team in BU '{team.Bu}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        await Console.Out.WriteLineAsync($"Error processing {teamType} Team for '{team.Bu}': {ex.Message}");
+                        Console.ResetColor();
+                        results.Add(new TeamOperationResult
+                        {
+                            TeamName = team.Bu,
+                            Exists = false,
+                            WasUpdated = false,
+                            BuName = team.Bu,
+                            Cancelled = false
+                        });
+                    }
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("\nOperation was cancelled by user.");
         }
         catch (Exception ex)
         {
+            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error in {teamType} Team creation/update process: {ex.Message}");
+            Console.ResetColor();
         }
-        return results;
+
+        return results.ToList();
     }
 }
 
@@ -439,12 +582,4 @@ public enum TeamType
 {
     Standard,
     Proprietary
-}
-
-public class TeamOperationResult
-{
-    public string TeamName { get; set; }
-    public bool Exists { get; set; }
-    public bool WasUpdated { get; set; }
-    public string BuName { get; set; }
 }

@@ -1,5 +1,4 @@
-﻿using CrmHub.ParkVisualizer;
-public class Program
+﻿public class Program
 {
     [STAThread]
     public static async Task Main()
@@ -13,6 +12,7 @@ public class Program
 public class MainMenuHandler
 {
     private readonly ITeamOperationsHandler? _teamOperations;
+    private List<BuUserDomains>? buUserDomainsList;
     public MainMenuHandler()
     {
         var consoleUI = new ConsoleUI();
@@ -31,10 +31,7 @@ public class MainMenuHandler
         {
             HandleFatalError(ex);
         }
-        finally
-        {
-            Cleanup();
-        }
+
     }
 
     private void InitializeApplication()
@@ -90,6 +87,43 @@ public class MainMenuHandler
                 }
                 return false;
 
+            case "4":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+                    var transformedTeams = FormatBUandTeams.FormatTeamData();
+                    if (transformedTeams is
+                        {
+                            Count: > 0
+                        })
+                    {
+                        // Create Work Order view
+                        var workOrderViewCreator = new WorkOrderViewCreator(transformedTeams);
+                        var workOrderResult = await workOrderViewCreator.RunAsync();
+
+                        // Only proceed with notifications view if work order view wasn't cancelled
+                        if (!workOrderResult.Cancelled)
+                        {
+                            var notificationsViewCreator = new NotificationsViewCreator(transformedTeams);
+                            await notificationsViewCreator.RunAsync();
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("No team data available for view creation.");
+                        Console.WriteLine("\nPress any key to continue...");
+                        Console.ReadKey(true);
+                    }
+                }
+                return false;
+
+            case "5":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+                    await this.ChangeUsersBuToNewTeamAsync(buUserDomainsList);
+                }
+                return false;
 
             case "6":
                 await HandleUserInfoRetrieval();
@@ -102,11 +136,8 @@ public class MainMenuHandler
             case "8":
                 HandleCredentialsUpdate();
                 return false;
-            case "9":
-                HandleParkVisualizer();
-                return false;
 
-            case "10":
+            case "9":
 
                 if (ConnectionCheck.EnsureConnected())
                 {
@@ -136,7 +167,7 @@ public class MainMenuHandler
                 }
                 return false;
 
-            case "11":
+            case "10":
 
                 if (ConnectionCheck.EnsureConnected())
                 {
@@ -152,6 +183,7 @@ public class MainMenuHandler
                 Console.WriteLine("Invalid choice");
                 return false;
         }
+
     }
 
     private async Task HandleUserInfoRetrieval()
@@ -167,22 +199,31 @@ public class MainMenuHandler
     {
         try
         {
-            List<TransformedTeamData> transformedTeams = FormatBUandTeams.FormatTeamData();
-            if (transformedTeams != null && transformedTeams.Count > 0)
+            var transformedTeams = FormatBUandTeams.FormatTeamData();
+            if (transformedTeams is
+                {
+                    Count: > 0
+                })
             {
-                // Create or verify Business Units
+                // Create or verify Business Units with cancellation support
                 var buResults = await CreateBu.RunAsync(transformedTeams);
 
-                // Process teams (your existing team creation code)
-                var standardTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Standard);
-                var proprietaryTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Proprietary);
-
-                // Display results
-                ResultsDisplay.DisplayResults(buResults, standardTeamResults, proprietaryTeamResults);
+                // Only proceed with team creation if not cancelled
+                if (!buResults.Any(r => r.Cancelled))
+                {
+                    var standardTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Standard);
+                    var proprietaryTeamResults = await CreateTeam.RunAsync(transformedTeams, TeamType.Proprietary);
+                    ResultsDisplay.DisplayResults(buResults, standardTeamResults, proprietaryTeamResults);
+                }
+                else
+                {
+                    Console.WriteLine("BU creation was cancelled. Team creation skipped.");
+                }
             }
             else
             {
-                Console.WriteLine("No teams to create were found, press any key to continue");
+                Console.WriteLine("No teams to create were found. Press any key to continue");
+                Console.ReadKey(true);
             }
         }
         catch (Exception ex)
@@ -199,26 +240,6 @@ public class MainMenuHandler
     private void HandleCredentialsUpdate()
     {
         CredentialsOperation.UpdateCredentials();
-    }
-
-    private void HandleParkVisualizer()
-    {
-        try
-        {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-
-            var parkVisualizerForm = new ParkVisualizerForm();
-            parkVisualizerForm.ShowDialog();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error launching Park Visualizer: {ex.Message}");
-        }
-        finally
-        {
-            ParkVisualizerCleanup();
-        }
     }
 
     private async Task MassivePrepAsync()
@@ -267,7 +288,7 @@ public class MainMenuHandler
     {
         Console.WriteLine("=== Main Menu ===");
         Console.WriteLine($"Current Environment: {EnvironmentsDetails.CurrentEnvironment}\n");
-        
+
         Console.WriteLine("Create Teams flow");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("1.  Create/Update Team Process (BU, Contrata team, EDPR Team) (1-5 is only for EU teams only)");
@@ -281,11 +302,10 @@ public class MainMenuHandler
         Console.WriteLine("6. View info about 1 or 2 users");
         Console.WriteLine("7. Switch Environment");
         Console.WriteLine("8. Update Credentials");
-        Console.WriteLine("9. Park visualizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("Extract workoders (only) attachments from EDP NAS");
-        Console.WriteLine("10. Prepare NAS file extraction");
-        Console.WriteLine("11. NAS File local Organizer");
+        Console.WriteLine("9. Prepare NAS file extraction");
+        Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("0. Exit");
         Console.Write("\nChoice: ");
@@ -297,7 +317,7 @@ public class MainMenuHandler
         Console.WriteLine("Press Enter to exit...");
         Console.ReadLine();
     }
-    
+
     private void ParkVisualizerCleanup()
     {
         foreach (Form form in Application.OpenForms)
@@ -306,8 +326,4 @@ public class MainMenuHandler
         }
     }
 
-    private void Cleanup()
-    {
-       
-    }
 }

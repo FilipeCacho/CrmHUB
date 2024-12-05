@@ -11,94 +11,107 @@ using System.Linq;
         Task AssignTeamsToUsers();
     }
 
-    public class TeamOperationsHandler : ITeamOperationsHandler
+public class TeamOperationsHandler : ITeamOperationsHandler
+{
+    private readonly ITeamUserService _teamUserService;
+    private readonly IConsoleUI _consoleUI;
+    private List<BuUserDomains>? _buUserDomainsList;
+
+    public TeamOperationsHandler(ITeamUserService teamUserService, IConsoleUI consoleUI)
     {
-        private readonly ITeamUserService _teamUserService;
-        private readonly IConsoleUI _consoleUI;
+        _teamUserService = teamUserService ?? throw new ArgumentNullException(nameof(teamUserService));
+        _consoleUI = consoleUI ?? throw new ArgumentNullException(nameof(consoleUI));
+    }
 
-        public TeamOperationsHandler(ITeamUserService teamUserService, IConsoleUI consoleUI)
+    public async Task ExtractUsersFromTeams()
+    {
+        try
         {
-            _teamUserService = teamUserService ?? throw new ArgumentNullException(nameof(teamUserService));
-            _consoleUI = consoleUI ?? throw new ArgumentNullException(nameof(consoleUI));
+            // Format team data with proper transformation
+            var transformedTeams = await FormatTeamDataAsync();
+            if (transformedTeams == null || !transformedTeams.Any())
+            {
+                _consoleUI.DisplayWarning("No teams found to process.");
+                return;
+            }
+
+            // Validate the transformed data before proceeding
+            foreach (var team in transformedTeams)
+            {
+                if (string.IsNullOrEmpty(team.FileName) || string.IsNullOrEmpty(team.EquipaContrataContrata))
+                {
+                    _consoleUI.DisplayError($"Invalid team data: {team.Bu}",
+                        new Exception("FileName or EquipaContrataContrata is missing"));
+                    return;
+                }
+            }
+
+            // Extract users and store the result
+            var (extractedUsers, messages) = await _teamUserService.ExtractUsersFromTeamsAsync(transformedTeams);
+            _buUserDomainsList = extractedUsers;
+
+            // Only display error messages if they exist
+            if (messages.Any())
+            {
+                _consoleUI.DisplayMessages(messages);
+            }
+
+          
         }
-
-        public async Task ExtractUsersFromTeams()
+        catch (Exception ex)
         {
-            try
-            {
-                List<TransformedTeamData> transformedTeams = FormatBUandTeams.FormatTeamData();
-                if (transformedTeams == null || !transformedTeams.Any())
-                {
-                    _consoleUI.DisplayWarning("No teams found to process.");
-                    return;
-                }
-
-                var (extractedUsers, messages) = await _teamUserService.ExtractUsersFromTeamsAsync(transformedTeams);
-
-                if (messages.Any())
-                {
-                    _consoleUI.DisplayMessages(messages);
-                }
-
-                if (extractedUsers?.Count > 0)
-                {
-                    _consoleUI.DisplayExtractedUsers(extractedUsers);
-                }
-                else
-                {
-                    _consoleUI.DisplayWarning("No users were extracted from the teams.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _consoleUI.DisplayError("Error during user extraction", ex);
-            }
-        }
-
-        public async Task AssignTeamsToUsers()
-        {
-            try
-            {
-                List<TransformedTeamData> transformedTeams = FormatBUandTeams.FormatTeamData();
-                if (transformedTeams == null || !transformedTeams.Any())
-                {
-                    _consoleUI.DisplayWarning("No teams found to process.");
-                    return;
-                }
-
-                var (users, _) = await _teamUserService.ExtractUsersFromTeamsAsync(transformedTeams);
-
-                if (users == null || users.Count == 0)
-                {
-                    _consoleUI.DisplayWarning("No users available to process. Please run option 2 first.");
-                    return;
-                }
-
-                var results = await _teamUserService.AssignTeamsToUsersAsync(users);
-
-                if (results != null && results.Any())
-                {
-                    _consoleUI.DisplayMessages(new[]
-                    {
-                        $"Successfully processed {results.Count} users.",
-                        "Check the previous messages for details of each operation."
-                    });
-                }
-
-                var operationMessages = _teamUserService.GetLastOperationMessages();
-                if (operationMessages.Any())
-                {
-                    _consoleUI.DisplayMessages(operationMessages);
-                }
-            }
-            catch (Exception ex)
-            {
-                _consoleUI.DisplayError("Error during team assignment", ex);
-            }
+            _consoleUI.DisplayError("Error during user extraction", ex);
         }
     }
 
-    public interface IConsoleUI
+    private async Task<List<TransformedTeamData>> FormatTeamDataAsync()
+    {
+        // Use the existing FormatBUandTeams.FormatTeamData() method
+        var transformedTeams = FormatBUandTeams.FormatTeamData();
+
+        if (transformedTeams == null || !transformedTeams.Any())
+        {
+            return new List<TransformedTeamData>();
+        }
+
+        return transformedTeams;
+    }
+
+    public async Task AssignTeamsToUsers()
+    {
+        try
+        {
+            if (_buUserDomainsList == null || !_buUserDomainsList.Any())
+            {
+                _consoleUI.DisplayWarning("No users available to process. Please run option 2 first.");
+                return;
+            }
+
+            var results = await _teamUserService.AssignTeamsToUsersAsync(_buUserDomainsList);
+
+            if (results?.Any() == true)
+            {
+                _consoleUI.DisplayMessages(new[]
+                {
+                    $"Successfully processed {results.Count} users.",
+                    "Check the previous messages for details of each operation."
+                });
+            }
+
+            var operationMessages = _teamUserService.GetLastOperationMessages();
+            if (operationMessages.Any())
+            {
+                _consoleUI.DisplayMessages(operationMessages);
+            }
+        }
+        catch (Exception ex)
+        {
+            _consoleUI.DisplayError("Error during team assignment", ex);
+        }
+    }
+}
+
+public interface IConsoleUI
     {
         void DisplayMessages(IEnumerable<string> messages);
         void DisplayExtractedUsers(List<BuUserDomains> users);
@@ -180,10 +193,10 @@ public class TeamUserService : ITeamUserService
 
         if (users != null)
         {
-            foreach (var buUsers in users)
-            {
-                _operationMessages.Add($"Extracted {buUsers.UserDomains.Count} users from {buUsers.NewCreatedPark}");
-            }
+           // foreach (var buUsers in users)
+            //{
+              //  _operationMessages.Add($"Extracted {buUsers.UserDomains.Count} users from {buUsers.NewCreatedPark}");
+            //}
             return (users, new List<string>(_operationMessages));
         }
 

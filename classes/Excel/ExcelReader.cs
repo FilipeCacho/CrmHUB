@@ -328,7 +328,7 @@ public class ExcelReader : IDisposable
         }
     }
 
-    ~ExcelReader()
+    ExcelReader()
     {
         Dispose(false);
     }
