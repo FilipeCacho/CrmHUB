@@ -66,7 +66,6 @@ public class TeamOperationsHandler : ITeamOperationsHandler
 
     private async Task<List<TransformedTeamData>> FormatTeamDataAsync()
     {
-        // Use the existing FormatBUandTeams.FormatTeamData() method
         var transformedTeams = FormatBUandTeams.FormatTeamData();
 
         if (transformedTeams == null || !transformedTeams.Any())

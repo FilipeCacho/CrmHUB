@@ -212,6 +212,7 @@ using System.Xml.Linq;
             Console.WriteLine("View creation cancelled.");
             Console.WriteLine("\nPress Enter to return to main menu...");
             Console.ReadKey(true);
+            Console.ResetColor();
             return null;
         }
 

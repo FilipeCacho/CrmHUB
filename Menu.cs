@@ -1,4 +1,6 @@
-﻿public class Program
+﻿using System;
+
+public class Program
 {
     [STAThread]
     public static async Task Main()
@@ -13,6 +15,7 @@ public class MainMenuHandler
 {
     private readonly ITeamOperationsHandler? _teamOperations;
     private List<BuUserDomains>? buUserDomainsList;
+
     public MainMenuHandler()
     {
         var consoleUI = new ConsoleUI();
@@ -31,7 +34,6 @@ public class MainMenuHandler
         {
             HandleFatalError(ex);
         }
-
     }
 
     private void InitializeApplication()
@@ -61,7 +63,6 @@ public class MainMenuHandler
 
     private async Task<bool> HandleMenuChoice(string input)
     {
-
         switch (input)
         {
             case "1":
@@ -92,10 +93,7 @@ public class MainMenuHandler
                 {
                     Console.Clear();
                     var transformedTeams = FormatBUandTeams.FormatTeamData();
-                    if (transformedTeams is
-                        {
-                            Count: > 0
-                        })
+                    if (transformedTeams is { Count: > 0 })
                     {
                         // Create Work Order view
                         var workOrderViewCreator = new WorkOrderViewCreator(transformedTeams);
@@ -138,16 +136,13 @@ public class MainMenuHandler
                 return false;
 
             case "9":
-
                 if (ConnectionCheck.EnsureConnected())
                 {
-
                     try
                     {
                         var processor = new NasQueryProcessor();
                         var nasLinks = await processor.ProcessNasDownloadsAsync();
 
-                        // Only proceed if we got some links
                         if (nasLinks != null && nasLinks.Any())
                         {
                             var massiveProcessor = new MassiveDownloadProcessor(nasLinks);
@@ -168,14 +163,29 @@ public class MainMenuHandler
                 return false;
 
             case "10":
-
                 if (ConnectionCheck.EnsureConnected())
                 {
-
-                    //Folder organizer
                     await SharepointOrganizerAsync();
                 }
                 return false;
+
+            case "11":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+                    var processor = new WorkOrderAuditProcessor();
+                    await processor.RunAsync();
+                }
+                return false;
+
+            case "12":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+                    using var bulkAssignment = new BulkRoleAssignment();
+                    await bulkAssignment.RunAsync();
+                }
+                    return false;
 
             case "0":
                 return true; // Signal to exit
@@ -183,7 +193,6 @@ public class MainMenuHandler
                 Console.WriteLine("Invalid choice");
                 return false;
         }
-
     }
 
     private async Task HandleUserInfoRetrieval()
@@ -200,10 +209,7 @@ public class MainMenuHandler
         try
         {
             var transformedTeams = FormatBUandTeams.FormatTeamData();
-            if (transformedTeams is
-                {
-                    Count: > 0
-                })
+            if (transformedTeams is { Count: > 0 })
             {
                 // Create or verify Business Units with cancellation support
                 var buResults = await CreateBu.RunAsync(transformedTeams);
@@ -244,7 +250,6 @@ public class MainMenuHandler
 
     private async Task MassivePrepAsync()
     {
-        //extract from excel and run query to fetch NAS links
         var processor = new NasQueryProcessor();
         await processor.ProcessNasDownloadsAsync();
     }
@@ -254,7 +259,6 @@ public class MainMenuHandler
         Console.Clear();
         try
         {
-            //folder organizer
             var organizer = new NasLocalFileOrganizer();
             await organizer.RunAsync();
         }
@@ -299,15 +303,17 @@ public class MainMenuHandler
         Console.WriteLine("5.  Change BU of users that have in their name the Contractor (Puesto de trabajo)");
         Console.WriteLine("--- Activate the created BU(s) in the form ---");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
-        Console.WriteLine("6. View info about 1 or 2 users");
-        Console.WriteLine("7. Switch Environment");
-        Console.WriteLine("8. Update Credentials");
+        Console.WriteLine("6.  View info about 1 or 2 users");
+        Console.WriteLine("7.  Switch Environment");
+        Console.WriteLine("8.  Update Credentials");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("Extract workoders (only) attachments from EDP NAS");
-        Console.WriteLine("9. Prepare NAS file extraction");
+        Console.WriteLine("9.  Prepare NAS file extraction");
         Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
-        Console.WriteLine("0. Exit");
+        Console.WriteLine("11. Apanhar ordens mal 700");
+        Console.WriteLine("12. Bulk Role Assignment");
+        Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }
 
@@ -325,5 +331,4 @@ public class MainMenuHandler
             form.Close();
         }
     }
-
 }
