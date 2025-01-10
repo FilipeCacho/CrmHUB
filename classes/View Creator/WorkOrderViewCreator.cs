@@ -30,11 +30,11 @@ using System.Xml.Linq;
             
 
             using var cts = new CancellationTokenSource();
-            string fetchXml = BuildWorkOrderQuery();  // Fixed: Changed from BuildNotificationsQuery to BuildWorkOrderQuery
+            string fetchXml = BuildWorkOrderQuery();  
 
             Console.Clear();
             Console.WriteLine("Generated FetchXML Query for Work Orders:");
-            Console.WriteLine(fetchXml.Replace("><", ">\n<")); // Better formatting
+            Console.WriteLine(fetchXml.Replace("><", ">\n<")); 
 
             var viewName = await PromptForViewNameAsync(cts.Token);
             if (string.IsNullOrEmpty(viewName))

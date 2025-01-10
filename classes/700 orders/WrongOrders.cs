@@ -4,6 +4,8 @@ using Microsoft.Xrm.Sdk.Query;
 using ClosedXML.Excel;
 using System.Text.Json;
 
+//this code places a empty cell when the priority value to correct column contains the text "US Only" case insensitive
+
 public class WorkOrderAuditProcessor
 {
     private readonly ServiceClient _serviceClient;
@@ -97,8 +99,26 @@ public class WorkOrderAuditProcessor
                     BackupQueryCount = 0
                 };
 
-                // If primary query returns no results, try backup query
-                if (primaryCount == 0)
+                // Process primary query results if they exist
+                if (primaryCount > 0 && auditRecords.Any())
+                {
+                    // Find the first record that doesn't have "US Only" in its priority (value to correct)
+                    Entity selectedRecord = null;
+                    foreach (var record in auditRecords)
+                    {
+                        var priorityOld = await GetPriorityValueToCorrect(record);
+                        if (!priorityOld.ToUpperInvariant().Contains("US ONLY"))
+                        {
+                            selectedRecord = record;
+                            break;
+                        }
+                    }
+
+                    // If no record found without "US Only" then pick the first most recent record
+                    selectedRecord ??= auditRecords[0];
+                    await ProcessAuditRecord(selectedRecord, auditEntry);
+                }
+                else // No primary results, try backup query
                 {
                     var (backupRecords, backupCount) = await RetrieveBackupAuditRecordsAsync(workOrderId, workorderName);
                     Console.WriteLine($"Found {backupCount} audit records in backup query");
@@ -106,16 +126,22 @@ public class WorkOrderAuditProcessor
                     auditEntry.BackupQueryCount = backupCount;
                     auditEntry.UsedBackupQuery = true;
 
-                    // Changed this condition - now process if we have any records
-                    if (backupRecords.Any())  // Previously was: if (backupCount == 1)
+                    if (backupRecords.Any())
                     {
-                        await ProcessAuditRecord(backupRecords[0], auditEntry);
+                        Entity selectedRecord = null;
+                        foreach (var record in backupRecords)
+                        {
+                            var priorityOld = await GetPriorityValueToCorrect(record);
+                            if (!priorityOld.Contains("US Only"))
+                            {
+                                selectedRecord = record;
+                                break;
+                            }
+                        }
+
+                        selectedRecord ??= backupRecords[0];
+                        await ProcessAuditRecord(selectedRecord, auditEntry);
                     }
-                }
-                // Process primary query results if they exist
-                else if (auditRecords.Any())
-                {
-                    await ProcessAuditRecord(auditRecords[0], auditEntry);
                 }
 
                 auditMasterList.Add(auditEntry);
@@ -136,6 +162,33 @@ public class WorkOrderAuditProcessor
             Console.WriteLine("\nPress any key to continue...");
             Console.ReadKey();
         }
+    }
+
+    private async Task<string> GetPriorityValueToCorrect(Entity auditRecord)
+    {
+        var jsonData = auditRecord.GetAttributeValue<string>("changedata");
+
+        if (string.IsNullOrEmpty(jsonData)) return string.Empty;
+
+        try
+        {
+            var auditData = JsonSerializer.Deserialize<AuditData>(jsonData);
+            if (auditData?.changedAttributes != null)
+            {
+                var priorityChange = auditData.changedAttributes.FirstOrDefault(x => x.logicalName == "msdyn_priority");
+
+                if (priorityChange != null)
+                {
+                    return await GetPriorityNameAsync(priorityChange.oldValue);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error parsing JSON: {ex.Message}");
+        }
+
+        return string.Empty;
     }
 
     private async Task ProcessAuditRecord(Entity auditRecord, WorkOrderAuditResults auditEntry)
@@ -232,11 +285,11 @@ public class WorkOrderAuditProcessor
         var countResult = await Task.Run(() => _serviceClient.RetrieveMultiple(new FetchExpression(countFetchXml)));
         var totalCount = countResult.Entities.Count;
 
-        List<Entity> oldestRecord = new();
+        List<Entity> records = new();
         if (totalCount > 0)
         {
             var fetchXml = $@"
-            <fetch top='1'>
+            <fetch>
                 <entity name='audit'>
                     <all-attributes />
                     <filter>
@@ -249,15 +302,15 @@ public class WorkOrderAuditProcessor
                         <condition attribute='attributemask' operator='like' value='%161%' />
                         <condition attribute='attributemask' operator='like' value='%168%' />
                     </filter>
-                    <order attribute='createdon' ascending='true' />
+                    <order attribute='createdon' descending='true' />
                 </entity>
             </fetch>";
 
             var auditResults = await Task.Run(() => _serviceClient.RetrieveMultiple(new FetchExpression(fetchXml)));
-            oldestRecord = auditResults.Entities.ToList();
+            records = auditResults.Entities.ToList();
         }
 
-        return (oldestRecord, totalCount);
+        return (records, totalCount);
     }
 
     private async Task<(List<Entity> Records, int TotalCount)> RetrieveBackupAuditRecordsAsync(Guid workOrderId, string workorderName)
@@ -278,11 +331,11 @@ public class WorkOrderAuditProcessor
         var countResult = await Task.Run(() => _serviceClient.RetrieveMultiple(new FetchExpression(countFetchXml)));
         var totalCount = countResult.Entities.Count;
 
-        List<Entity> oldestRecord = new();
+        List<Entity> records = new();
         if (totalCount > 0)
         {
             var fetchXml = $@"
-            <fetch top='1'>
+            <fetch>
                 <entity name='audit'>
                     <all-attributes />
                     <filter>
@@ -290,15 +343,28 @@ public class WorkOrderAuditProcessor
                         <condition attribute='objecttypecode' operator='eq' value='10122' />
                         <condition attribute='attributemask' operator='like' value='%75%' />
                     </filter>
-                    <order attribute='createdon' ascending='true' />
+                    <order attribute='createdon' descending='true' />
                 </entity>
             </fetch>";
 
             var auditResults = await Task.Run(() => _serviceClient.RetrieveMultiple(new FetchExpression(fetchXml)));
-            oldestRecord = auditResults.Entities.ToList();
+            records = auditResults.Entities.ToList();
         }
 
-        return (oldestRecord, totalCount);
+        return (records, totalCount);
+    }
+
+    private string MapInstallValues(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+
+        return value switch
+        {
+            "1" => "En funcionamiento",
+            "2" => "Limitado",
+            "3" => "Fuera de servicio",
+            _ => value
+        };
     }
 
     private async Task CreateExcelFileAsync(List<WorkOrderAuditResults> auditResults)
@@ -313,27 +379,25 @@ public class WorkOrderAuditProcessor
 
         await Task.Run(() =>
         {
-        using var excelfile = new XLWorkbook();
-        var sheet = excelfile.Worksheets.Add("Audit Results");
+            using var excelfile = new XLWorkbook();
+            var sheet = excelfile.Worksheets.Add("Audit Results");
 
-        // headers
-        sheet.Cell(1, 1).Value = "Workorder";
-        sheet.Cell(1, 2).Value = "Number of Audit Logs Returned";
-        sheet.Cell(1, 3).Value = "Priority (Value to Correct)";
-        sheet.Cell(1, 4).Value = "Priority (Present Value)";
-        sheet.Cell(1, 5).Value = "EstdInstal (Value to Correct)";
-        sheet.Cell(1, 6).Value = "EstdInstal (Present Value)";
-        sheet.Cell(1, 7).Value = "FechaFin (Value to Correct)";
-        sheet.Cell(1, 8).Value = "FechaFin (Present Value)";
+            // headers
+            sheet.Cell(1, 1).Value = "Workorder";
+            sheet.Cell(1, 2).Value = "Priority (Value to Correct)";
+            sheet.Cell(1, 3).Value = "Priority (Present Value)";
+            sheet.Cell(1, 4).Value = "EstdInstal (Value to Correct)";
+            sheet.Cell(1, 5).Value = "EstdInstal (Present Value)";
+            sheet.Cell(1, 6).Value = "FechaFin (Value to Correct)";
+            sheet.Cell(1, 7).Value = "FechaFin (Present Value)";
 
-        // header styles
-        var headerRange = sheet.Range(1, 1, 1, 8);
-        headerRange.Style.Font.Bold = true;
-        headerRange.Style.Fill.BackgroundColor = XLColor.LightGray;
+            // header styles
+            var headerRange = sheet.Range(1, 1, 1, 7);
+            headerRange.Style.Font.Bold = true;
+            headerRange.Style.Fill.BackgroundColor = XLColor.LightGray;
 
             // color codes
             var highlightYellow = XLColor.FromHtml("#FFEB9C");
-            var highlightRed = XLColor.FromHtml("#FFC7CE");
             var highlightBlue = XLColor.FromHtml("#DCE6F1");
 
             // add data to excel and applies formatting
@@ -341,30 +405,27 @@ public class WorkOrderAuditProcessor
             {
                 var row = i + 2;
                 var result = auditResults[i];
-                var range = sheet.Range(row, 1, row, 8);
+                var range = sheet.Range(row, 1, row, 7);
 
                 // force write these values
                 sheet.Cell(row, 1).Value = result.WorkOrderName ?? "";
-                sheet.Cell(row, 2).Value = result.UsedBackupQuery ? result.BackupQueryCount : result.PrimaryQueryCount;
 
                 // Process data for all cases where we have an audit record
                 if ((result.PrimaryQueryCount >= 1) || (result.PrimaryQueryCount == 0 && result.BackupQueryCount >= 1))
+                {
+                    //remove content of any cells in the column PriorityOld contains "US ONLY" case insensitive
+                    string priorityOldValue = (result.PriorityOld ?? "").ToUpperInvariant().Contains("US ONLY") ? "" : (result.PriorityOld ?? "");
 
-                    {
-                        sheet.Cell(row, 3).Value = result.PriorityOld ?? "";
-                    sheet.Cell(row, 4).Value = result.PriorityNew ?? "";
-                    sheet.Cell(row, 5).Value = result.EstdInstalOld ?? "";
-                    sheet.Cell(row, 6).Value = result.EstdInstalNew ?? "";
-                    sheet.Cell(row, 7).Value = result.FechaFinOld ?? "";
-                    sheet.Cell(row, 8).Value = result.FechaFinNew ?? "";
+                    sheet.Cell(row, 2).Value = priorityOldValue;
+                    sheet.Cell(row, 3).Value = result.PriorityNew ?? "";
+                    sheet.Cell(row, 4).Value = MapInstallValues(result.EstdInstalOld);
+                    sheet.Cell(row, 5).Value = MapInstallValues(result.EstdInstalNew);
+                    sheet.Cell(row, 6).Value = result.FechaFinOld ?? "";
+                    sheet.Cell(row, 7).Value = result.FechaFinNew ?? "";
                 }
 
                 // set colors based on conditions
-                if (result.PrimaryQueryCount > 1)
-                {
-                    range.Style.Fill.BackgroundColor = highlightRed;  // Multiple results from primary query
-                }
-                else if (result.PrimaryQueryCount == 0)
+                if (result.PrimaryQueryCount == 0)
                 {
                     if (result.BackupQueryCount >= 1)
                     {
@@ -393,11 +454,11 @@ public class WorkOrderAuditProcessor
             Console.WriteLine($"\nProcessed {auditResults.Count} records");
             foreach (var result in auditResults)
             {
-                Console.WriteLine($"Work Order: {result.WorkOrderName}, Results: {result.PrimaryQueryCount}");
+                Console.WriteLine($"Work Order: {result.WorkOrderName}");
                 if ((result.PrimaryQueryCount >= 1) || (result.PrimaryQueryCount == 0 && result.BackupQueryCount == 1))
                 {
                     Console.WriteLine($"Priority: {result.PriorityOld} -> {result.PriorityNew}");
-                    Console.WriteLine($"EstdInstal: {result.EstdInstalOld} -> {result.EstdInstalNew}");
+                    Console.WriteLine($"EstdInstal: {MapInstallValues(result.EstdInstalOld)} -> {MapInstallValues(result.EstdInstalNew)}");
                     Console.WriteLine($"FechaFin: {result.FechaFinOld} -> {result.FechaFinNew}");
                 }
             }

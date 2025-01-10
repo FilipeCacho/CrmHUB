@@ -187,6 +187,19 @@ public class MainMenuHandler
                 }
                     return false;
 
+            case "13":
+                Console.Clear();
+                var userNormalizer = new UserNormalizerV2();
+                List<UserNormalizationResult> results = await userNormalizer.Run();
+                if (results != null && results.Count > 0)
+                {
+                    // Process SAP normalization only if users were normalized
+                    UserSAPNormalizer.ProcessUsersAsync(results);
+                    // Run workflow for normalized users
+                    await RunNewUserWorkFlow.ExecuteWorkflowForUsersAsync(results);
+                }
+                return false;
+
             case "0":
                 return true; // Signal to exit
             default:
@@ -312,7 +325,8 @@ public class MainMenuHandler
         Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("11. Apanhar ordens mal 700");
-        Console.WriteLine("12. Bulk Role Assignment");
+        Console.WriteLine("12. Assign same role  to multiple users");
+        Console.WriteLine("13. Normalize Users");
         Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }

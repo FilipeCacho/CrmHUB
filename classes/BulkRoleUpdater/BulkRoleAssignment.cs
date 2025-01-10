@@ -74,7 +74,7 @@ public class BulkRoleAssignment : IDisposable
             while (true)
             {
                 Console.WriteLine("\nThis process will assign a role to multiple users from a text file.");
-                Console.WriteLine("The text file should contain one full name per line (e.g., 'John Smith').");
+                Console.WriteLine("The text file should contain one full name per line (e.g., John Smith), don't add anything else, no , no ; nothing.");
                 Console.WriteLine("Users will be searched by their name as shown in Dynamics.");
                 Console.WriteLine("Press 'q' at any time to cancel the operation.");
                 Console.Write("\nDo you want to proceed? (y/n): ");
