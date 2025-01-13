@@ -42,7 +42,7 @@ public sealed class CreateBu
         try
         {
             // Initialize the business unit manager with modern using declaration
-            using var serviceClient = SessionManager.Instance.GetClient();
+            var serviceClient = SessionManager.Instance.GetClient();
             var buManager = new DataverseBusinessUnitManager(serviceClient);
 
             // Process teams with parallel execution for better performance

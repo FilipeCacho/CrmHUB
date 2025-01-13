@@ -48,7 +48,7 @@ using System.Xml.Linq;
                 };
             }
 
-            using var serviceClient = SessionManager.Instance.GetClient();
+            var serviceClient = SessionManager.Instance.GetClient();
             var viewId = await CreatePersonalViewAsync(serviceClient, fetchXml, viewName, cts.Token);
 
             Console.ForegroundColor = ConsoleColor.Green;
