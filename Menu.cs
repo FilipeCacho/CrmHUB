@@ -1,5 +1,5 @@
 ﻿using System;
-
+using CrmHub.Classes.ParkVisualizer;
 public class Program
 {
     [STAThread]
@@ -201,17 +201,9 @@ public class MainMenuHandler
                 return false;
 
             case "14":
-                Thread thread = new Thread(() =>
-                {
-                    Application.SetHighDpiMode(HighDpiMode.SystemAware);
-                    Application.EnableVisualStyles();
-                    Application.SetCompatibleTextRenderingDefault(false);
-                    var demoExplorer = new FileExplorerForm();
-                    demoExplorer.FormClosed += (s, args) => Application.ExitThread();
-                    Application.Run(demoExplorer);
-                });
-                thread.SetApartmentState(ApartmentState.STA);
-                thread.Start();
+                Console.Clear();
+                var parkExplorer = new ParkExplorerHandler();
+                await parkExplorer.LaunchParkExplorer();
                 return false;
 
             case "0":
