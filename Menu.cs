@@ -200,6 +200,20 @@ public class MainMenuHandler
                 }
                 return false;
 
+            case "14":
+                Thread thread = new Thread(() =>
+                {
+                    Application.SetHighDpiMode(HighDpiMode.SystemAware);
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    var demoExplorer = new FileExplorerForm();
+                    demoExplorer.FormClosed += (s, args) => Application.ExitThread();
+                    Application.Run(demoExplorer);
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                return false;
+
             case "0":
                 return true; // Signal to exit
             default:
@@ -327,6 +341,7 @@ public class MainMenuHandler
         Console.WriteLine("11. Apanhar ordens mal 700");
         Console.WriteLine("12. Assign same role  to multiple users");
         Console.WriteLine("13. Normalize Users");
+        Console.WriteLine("14. Open Park Explorer");
         Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }

@@ -201,7 +201,7 @@ public class BulkRoleAssignment : IDisposable
 
             // Show found role and confirm
             Console.WriteLine($"\nFound role: {role.GetAttributeValue<string>("name")}");
-            Console.Write("Is this the correct role? (y/n): ");
+            Console.Write("\nIs this the correct role? (y/n): ");
 
             var confirm = Console.ReadLine()?.ToLower();
             if (confirm == "y") return role;
