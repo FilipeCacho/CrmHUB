@@ -13,15 +13,8 @@ public class Program
 
 public class MainMenuHandler
 {
-    private readonly ITeamOperationsHandler? _teamOperations;
     private List<BuUserDomains>? buUserDomainsList;
 
-    public MainMenuHandler()
-    {
-        var consoleUI = new ConsoleUI();
-        var teamUserService = new TeamUserService();
-        _teamOperations = new TeamOperationsHandler(teamUserService, consoleUI);
-    }
 
     public async Task RunAsync()
     {
@@ -73,19 +66,27 @@ public class MainMenuHandler
                 return false;
 
             case "2":
-                if (ConnectionCheck.EnsureConnected() && _teamOperations != null)
+                if (ConnectionCheck.EnsureConnected())
                 {
                     Console.Clear();
-                    await _teamOperations.ExtractUsersFromTeams();
+                    var transformedTeams = await ExtractUsersFromTeam.FormatTeamData();
+                    if (transformedTeams != null && transformedTeams.Any())
+                    {
+                        await ExtractUsersFromTeam.CreateExcel(transformedTeams);
+                    }
                 }
                 return false;
 
             case "3":
-                if (ConnectionCheck.EnsureConnected() && _teamOperations != null)
+                if (ConnectionCheck.EnsureConnected())
                 {
+                    List<TransformedTeamData> transformedBus = await ExtractUsersFromTeam.FormatTeamData();
+                    buUserDomainsList = await ExtractUsersFromTeam.CreateExcel(transformedBus);
                     Console.Clear();
-                    await _teamOperations.AssignTeamsToUsers();
+                    var assignTeamToUser = new AssignNewTeamToUser(buUserDomainsList);
+                    var processedUsers = await assignTeamToUser.ProcessUsersAsync();  
                 }
+                
                 return false;
 
             case "4":
@@ -206,6 +207,15 @@ public class MainMenuHandler
                 await parkExplorer.LaunchParkExplorer();
                 return false;
 
+          
+            case "15":
+                Console.Clear();
+                var adjuster = new HardcodedExcelAdjuster();
+                adjuster.ProcessExcelFile();
+                return false;
+        
+                
+
             case "0":
                 return true; // Signal to exit
             default:
@@ -225,6 +235,8 @@ public class MainMenuHandler
 
     private async Task CreateBuAndTeams()
     {
+        Console.Clear();
+
         try
         {
             var transformedTeams = FormatBUandTeams.FormatTeamData();
@@ -316,7 +328,7 @@ public class MainMenuHandler
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("1.  Create/Update Team Process (BU, Contrata team, EDPR Team) (1-5 is only for EU teams only)");
         Console.WriteLine("2.  Extract users from BU and it's contrata Contrata team");
-        Console.WriteLine("3.  Give newly created team to extracted users");
+        Console.WriteLine("3.  Give newly created team to extracted users (if any were extracted in step 2");
         Console.WriteLine("4.  Create views for workorders and notifications (ordens de trabajo e avisos)");
         Console.WriteLine("--- Run the worflows in XRM Toolbox ---");
         Console.WriteLine("5.  Change BU of users that have in their name the Contractor (Puesto de trabajo)");
@@ -331,9 +343,10 @@ public class MainMenuHandler
         Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("11. Apanhar ordens mal 700");
-        Console.WriteLine("12. Assign same role  to multiple users");
+        Console.WriteLine("12. Assign same role to multiple users");
         Console.WriteLine("13. Normalize Users");
         Console.WriteLine("14. Open Park Explorer");
+        Console.WriteLine("15. Hardcoded excel adjuster");
         Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }

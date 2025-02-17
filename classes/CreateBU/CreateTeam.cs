@@ -477,29 +477,29 @@ public sealed class TeamManager
 public class CreateTeam
 {
     public static async Task<List<TeamOperationResult>> RunAsync(
-        List<TransformedTeamData> transformedTeams,
-        TeamType teamType)
+    List<TransformedTeamData> transformedTeams,
+    TeamType teamType)
     {
-        // Display warning and wait for user confirmation
-        Console.WriteLine("Press any key to start the team creation process. Press 'q' at any time to cancel.");
-        Console.WriteLine("Note: Cancellation will complete the current team operation before stopping.");
-        Console.ReadKey(true);
-
-        // Create cancellation token source that will be triggered when 'q' is pressed
         using var cts = new CancellationTokenSource();
         var results = new ConcurrentBag<TeamOperationResult>();
-
-        // Start key monitoring task
-        _ = Task.Run(() =>
+        var monitorTask = Task.Run(async () =>
         {
-            while (!cts.Token.IsCancellationRequested)
+            try
             {
-                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
+                while (true)
                 {
-                    cts.Cancel();
-                    Console.WriteLine("\nCancellation requested. Completing current operation...");
-                    break;
+                    if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
+                    {
+                        cts.Cancel();
+                        Console.WriteLine("\nCancellation requested. Completing current operation...");
+                        break;
+                    }
+                    await Task.Delay(100, cts.Token);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal cancellation, ignore
             }
         });
 
@@ -507,7 +507,6 @@ public class CreateTeam
         {
             var teamManager = new TeamManager();
 
-            // Process teams with parallel execution for better performance
             await Parallel.ForEachAsync(transformedTeams,
                 new ParallelOptions
                 {
@@ -518,7 +517,6 @@ public class CreateTeam
                 {
                     try
                     {
-                        // Create appropriate team type using pattern matching
                         BaseTeam baseTeam = teamType switch
                         {
                             TeamType.Proprietary => new ProprietaryTeam(),
@@ -572,6 +570,17 @@ public class CreateTeam
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error in {teamType} Team creation/update process: {ex.Message}");
             Console.ResetColor();
+        }
+        finally
+        {
+            // Cancel the monitoring task if it hasn't been cancelled already
+            if (!cts.IsCancellationRequested)
+            {
+                cts.Cancel();
+            }
+
+            // Wait for the monitoring task to complete
+            await monitorTask;
         }
 
         return results.ToList();

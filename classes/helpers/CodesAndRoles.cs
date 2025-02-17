@@ -37,14 +37,14 @@
 
         //User normalizer teams & Roles
         public static readonly string[] EUDefaultRolesForExternalUsers = { "EDPR_ROL_EUROPA", "EDPR_ROL_Field Service_Resource", "EDPR_ROL_GENERAL" };
-        public static readonly string[] EUDefaultRolesForInternalUsers = { "EDPR_ROL_EUROPA", "EDPR_ROL_Field Service_Resource", "EDPR_ROL_GENERAL", "EDPR_personal_interno", "Resco Archive Read" };
+        public static readonly string[] EUDefaultRolesForInternalUsers = { "EDPR_ROL_EUROPA", "EDPR_ROL_Field Service_Resource", "EDPR_ROL_GENERAL", "EDPR_personal_interno", "EDPR_MonthlyMeetings", "Resco Archive Read" };
 
         public static readonly string[] EUDefaultTeamsForExternalUsers = { "Equipo gestión conocimiento contratas" };
-        public static readonly string[] EUDefaultTeamsForInteralUsers = { "Equipo gestión conocimiento personal interno" };
+        public static readonly string[] EUDefaultTeamsForInternalUsers = { "Equipo gestión conocimiento personal interno"};
 
         public static readonly string[] EUDefaultTeamForPortugueseAndSpanishUsers = { "Equipo dashboard contratas ES y PT" };
 
-        public static readonly string[] NADefaultRolesForInternalUser = { "EDPR_ROL_USA", "EDPR_ROL_Field Service_Resource", "EDPR_ROL_GENERAL", "EDPR_personal_interno", "Resco Archive Read" };
+        public static readonly string[] NADefaultRolesForInternalUser = { "EDPR_ROL_USA", "EDPR_ROL_Field Service_Resource", "EDPR_ROL_GENERAL", "EDPR_personal_interno", "EDPR_MonthlyMeetings", "Resco Archive Read" };
 
         public static readonly string[] EURegion = { "EU", "300000000" };
         public static readonly string[] NARegion = { "NA", "300000001" };

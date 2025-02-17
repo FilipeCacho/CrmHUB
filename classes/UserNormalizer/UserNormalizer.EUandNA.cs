@@ -26,7 +26,7 @@ public sealed partial class UserNormalizerV2
         var isInternal = IsInternalUser(username);
 
         var (rolesToAdd, teamsToAdd) = isInternal
-            ? (CodesAndRoles.EUDefaultRolesForInternalUsers, CodesAndRoles.EUDefaultTeamsForInteralUsers)
+            ? (CodesAndRoles.EUDefaultRolesForInternalUsers, CodesAndRoles.EUDefaultTeamsForInternalUsers)
             : (CodesAndRoles.EUDefaultRolesForExternalUsers, CodesAndRoles.EUDefaultTeamsForExternalUsers);
 
         try

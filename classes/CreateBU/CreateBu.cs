@@ -5,6 +5,8 @@ using System.Collections.Concurrent;
 
 public sealed class CreateBu
 {
+    private static bool _warningDisplayed;
+
     // Record to hold the creation result with modern C# record type
     public sealed record BuCreationResult
     {
@@ -16,36 +18,49 @@ public sealed class CreateBu
 
     public static async Task<List<BuCreationResult>> RunAsync(List<TransformedTeamData> transformedTeams)
     {
-        // Display warning and wait for user confirmation
-        Console.WriteLine("Press any key to start the BU creation process. Press 'q' at any time to cancel.");
-        Console.WriteLine("Note: Cancellation will complete the current BU operation before stopping.");
-        Console.ReadKey(true);
-
-        // Create cancellation token source that will be triggered when 'q' is pressed
-        using var cts = new CancellationTokenSource();
-        var results = new ConcurrentBag<BuCreationResult>();
-
-        // Start key monitoring task
-        _ = Task.Run(() =>
+        if (!_warningDisplayed)
         {
-            while (!cts.Token.IsCancellationRequested)
+            Console.ForegroundColor = ConsoleColor.Yellow;
+
+            Console.WriteLine("\nNote: Cancellation will complete the current BU operation before stopping.");
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.WriteLine("Press any key to start the BU creation process. Press 'q' at any time to cancel.");
+            Console.ResetColor();
+            Console.ReadKey(true);
+            _warningDisplayed = true;
+            Console.Clear();
+        }
+
+        var results = new ConcurrentBag<BuCreationResult>();
+        using var cts = new CancellationTokenSource();
+
+        // Start key monitoring task and store its reference
+        var monitorTask = Task.Run(async () =>
+        {
+            try
             {
-                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
+                while (true)
                 {
-                    cts.Cancel();
-                    Console.WriteLine("\nCancellation requested. Completing current operation...");
-                    break;
+                    if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Q)
+                    {
+                        cts.Cancel();
+                        Console.WriteLine("\nCancellation requested. Completing current operation...");
+                        break;
+                    }
+                    await Task.Delay(100, cts.Token); // Use Task.Delay instead of Thread.Sleep
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal cancellation, ignore
             }
         });
 
         try
         {
-            // Initialize the business unit manager with modern using declaration
             var serviceClient = SessionManager.Instance.GetClient();
             var buManager = new DataverseBusinessUnitManager(serviceClient);
 
-            // Process teams with parallel execution for better performance
             await Parallel.ForEachAsync(transformedTeams,
                 new ParallelOptions
                 {
@@ -103,6 +118,17 @@ public sealed class CreateBu
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error in Business Unit creation process: {ex.Message}");
             Console.ResetColor();
+        }
+        finally
+        {
+            // Cancel the monitoring task if it hasn't been cancelled already
+            if (!cts.IsCancellationRequested)
+            {
+                cts.Cancel();
+            }
+
+            // Wait for the monitoring task to complete
+            await monitorTask;
         }
 
         return results.ToList();

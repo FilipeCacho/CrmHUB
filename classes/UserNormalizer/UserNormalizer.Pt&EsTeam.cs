@@ -23,7 +23,7 @@ public sealed partial class UserNormalizerV2
                 await EnsureUserHasTeams(user, CodesAndRoles.EUDefaultTeamForPortugueseAndSpanishUsers);
 
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"\nSuccessfully added Portugal/Spain teams for business unit: {buName}");
+                Console.WriteLine($"\nSuccessfully added Portugal/Spain teams to the user");
                 Console.ResetColor();
             }
             else
