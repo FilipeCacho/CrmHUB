@@ -21,6 +21,14 @@ public class AssignNewTeamToUser
     {
         try
         {
+            if (buUserDomainsList == null || !buUserDomainsList.Any())
+            {
+                Console.WriteLine("There are no users to process.");
+                Console.WriteLine("Press any key to continue...");
+                Console.ReadKey();
+                return new List<ProcessedUser>();
+            }
+
             CreateEquipoContrataMapping();
             return await AssignUsersToParksAsync();
         }
@@ -100,10 +108,20 @@ public class AssignNewTeamToUser
         string lowercaseInput = input.ToLower();
         int firstContrataIndex = lowercaseInput.IndexOf("contrata");
 
-        string result = firstContrataIndex == -1 ? input.Trim() :
-            lowercaseInput.IndexOf("contrata", firstContrataIndex + 1) == -1 ? input.Trim() :
-            input[..lowercaseInput.IndexOf("contrata", firstContrataIndex + 1)].Trim();
+        // If no "contrata" found, return original input
+        if (firstContrataIndex == -1) return input.Trim();
 
+        // Find second "contrata"
+        int secondContrataIndex = lowercaseInput.IndexOf("contrata", firstContrataIndex + 1);
+
+        // If no second "contrata", return original input
+        if (secondContrataIndex == -1) return input.Trim();
+
+        // Take everything up to and including the second "Contrata"
+        int endPosition = secondContrataIndex + "contrata".Length;
+        string result = input.Substring(0, endPosition).Trim();
+
+        // Keep the ZP check from the original code
         if (result.Length >= 3)
         {
             string lastThreeChars = result[^3..];
@@ -116,157 +134,185 @@ public class AssignNewTeamToUser
         return result;
     }
 
-    private async Task<bool> AssignUserToTeamAsync(string userDomain, string equipoContrata)
+    private async Task<bool> AssignUserToTeamAsync(string userDomain, string fullTeamName)
     {
-        string contrataContrataTeam = FindParkMasterDataTeam(equipoContrata);
-
         try
         {
-            // Retrieve the user
-            var userQuery = new QueryExpression("systemuser")
-            {
-                ColumnSet = new ColumnSet("systemuserid"),
-                Criteria = new FilterExpression()
-            };
-            userQuery.Criteria.AddCondition("domainname", ConditionOperator.Equal, userDomain);
+            // Extract the team name variations we need
+            var teamNames = ExtractTeamNames(fullTeamName);
+            var baseTeam = teamNames.BaseTeam;
+            var intermediateTeam = teamNames.IntermediateTeam;
+            var finalTeam = teamNames.FinalTeam;
 
-            var userResults = await Task.Run(() => serviceClient.RetrieveMultiple(userQuery));
-            if (userResults.Entities.Count == 0)
+            // Get user ID
+            var userId = await GetUserIdAsync(userDomain);
+            if (!userId.HasValue) return false;
+
+            // Check if user is in intermediate team first
+            var intermediateTeamId = await GetTeamIdAsync(intermediateTeam);
+            if (!intermediateTeamId.HasValue)
             {
-                Console.WriteLine($"User not found: {userDomain}");
+                Console.WriteLine($"Intermediate team not found: {intermediateTeam}");
                 return false;
             }
 
-            var userId = userResults.Entities[0].Id;
-
-            // Check if the Contrata Contrata team exists
-            var contrataTeamQuery = new QueryExpression("team")
+            // Check if user is member of intermediate team
+            if (!await IsUserTeamMemberAsync(userId.Value, intermediateTeamId.Value))
             {
-                ColumnSet = new ColumnSet("teamid"),
-                Criteria = new FilterExpression()
-            };
-            contrataTeamQuery.Criteria.AddCondition("name", ConditionOperator.Equal, contrataContrataTeam);
-
-            var contrataTeamResults = await Task.Run(() => serviceClient.RetrieveMultiple(contrataTeamQuery));
-            if (contrataTeamResults.Entities.Count == 0)
-            {
-                Console.WriteLine($"Contrata Contrata team not found: {contrataContrataTeam}");
+                Console.WriteLine($"User {userDomain} is not a member of intermediate team {intermediateTeam}");
                 return false;
             }
 
-            var contrataTeamId = contrataTeamResults.Entities[0].Id;
+            // Only proceed with assignments if user is in intermediate team
 
-            // Check if the user is already a member of the Contrata Contrata team
-            var membershipQuery = new QueryExpression("teammembership")
+            // Assign to base team
+            var baseTeamId = await GetTeamIdAsync(baseTeam);
+            if (!baseTeamId.HasValue)
             {
-                Criteria = new FilterExpression()
-            };
-            membershipQuery.Criteria.AddCondition("systemuserid", ConditionOperator.Equal, userId);
-            membershipQuery.Criteria.AddCondition("teamid", ConditionOperator.Equal, contrataTeamId);
-
-            var membershipResults = await Task.Run(() => serviceClient.RetrieveMultiple(membershipQuery));
-
-            bool contrataTeamAssigned = false;
-
-            if (membershipResults.Entities.Count == 0)
-            {
-                try
-                {
-                    await Task.Run(() => serviceClient.Execute(new AssociateRequest
-                    {
-                        Target = new EntityReference("team", contrataTeamId),
-                        RelatedEntities = new EntityReferenceCollection { new EntityReference("systemuser", userId) },
-                        Relationship = new Relationship("teammembership_association")
-                    }));
-
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write($"User {userDomain} successfully assigned to Contrata Contrata team");
-                    Console.Write(contrataContrataTeam);
-                    Console.ResetColor();
-
-                    contrataTeamAssigned = true;
-                }
-                catch (Exception ex)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Failed to assign user {userDomain} to Contrata Contrata team {contrataContrataTeam}: {ex.Message}");
-                    Console.ResetColor();
-                    return false;
-                }
-            }
-            else
-            {
-                contrataTeamAssigned = true;
-            }
-
-            // Only proceed with new team assignment if Contrata Contrata team assignment was successful
-            if (contrataTeamAssigned)
-            {
-                var newTeamQuery = new QueryExpression("team")
-                {
-                    ColumnSet = new ColumnSet("teamid"),
-                    Criteria = new FilterExpression()
-                };
-                newTeamQuery.Criteria.AddCondition("name", ConditionOperator.Equal, equipoContrata);
-
-                var newTeamResults = await Task.Run(() => serviceClient.RetrieveMultiple(newTeamQuery));
-                if (newTeamResults.Entities.Count == 0)
-                {
-                    Console.WriteLine($"New team not found: {equipoContrata}");
-                    return false;
-                }
-
-                var newTeamId = newTeamResults.Entities[0].Id;
-
-                // Check if user is already a member of the new team
-                var newMembershipQuery = new QueryExpression("teammembership")
-                {
-                    Criteria = new FilterExpression()
-                };
-                newMembershipQuery.Criteria.AddCondition("systemuserid", ConditionOperator.Equal, userId);
-                newMembershipQuery.Criteria.AddCondition("teamid", ConditionOperator.Equal, newTeamId);
-
-                var newMembershipResults = await Task.Run(() => serviceClient.RetrieveMultiple(newMembershipQuery));
-
-                if (newMembershipResults.Entities.Count == 0)
-                {
-                    try
-                    {
-                        await Task.Run(() => serviceClient.Execute(new AssociateRequest
-                        {
-                            Target = new EntityReference("team", newTeamId),
-                            RelatedEntities = new EntityReferenceCollection { new EntityReference("systemuser", userId) },
-                            Relationship = new Relationship("teammembership_association")
-                        }));
-                        Console.WriteLine($"User {userDomain} successfully assigned to new team {equipoContrata}");
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Failed to assign user {userDomain} to new team {equipoContrata}: {ex.Message}");
-                        return false;
-                    }
-                }
-                else
-                {
-                    Console.WriteLine($"User {userDomain} is already a member of the new team {equipoContrata}");
-                    return true;
-                }
-            }
-            else
-            {
-                Console.WriteLine($"User {userDomain} could not be assigned to new team {equipoContrata} because Contrata Contrata team assignment failed");
+                Console.WriteLine($"Base team not found: {baseTeam}");
                 return false;
             }
+            await AssignUserToSingleTeamAsync(userId.Value, baseTeamId.Value, userDomain, baseTeam);
+
+            // Assign to final team
+            var finalTeamId = await GetTeamIdAsync(finalTeam);
+            if (!finalTeamId.HasValue)
+            {
+                Console.WriteLine($"Final team not found: {finalTeam}");
+                return false;
+            }
+            await AssignUserToSingleTeamAsync(userId.Value, finalTeamId.Value, userDomain, finalTeam);
+
+            return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"An error occurred while assigning user to team: {ex.Message}");
+            Console.WriteLine($"Error in AssignUserToTeamAsync: {ex.Message}");
             return false;
         }
     }
-}
 
+    private class TeamNames
+    {
+        public string BaseTeam { get; set; }
+        public string IntermediateTeam { get; set; }
+        public string FinalTeam { get; set; }
+    }
+
+    private TeamNames ExtractTeamNames(string fullTeamName)
+    {
+        // Split by "Contrata" while preserving casing from original string
+        var parts = fullTeamName.Split(new[] { " Contrata " }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2) return new TeamNames();  // Return empty object instead of null
+
+        var basePattern = parts[0];
+
+        // Find the hyphenated pattern (e.g., "0-ES-BDY-01")
+        var hyphenMatch = Regex.Match(basePattern, @"\d+-[A-Z]+-[A-Z]+-\d+");
+        if (!hyphenMatch.Success) return new TeamNames();  // Return empty object instead of null
+
+        var hyphenPattern = hyphenMatch.Value;
+        var beforeHyphen = basePattern.Substring(0, hyphenMatch.Index).Trim();
+
+        return new TeamNames
+        {
+            BaseTeam = $"{beforeHyphen} {hyphenPattern}".Trim(),
+            IntermediateTeam = $"{beforeHyphen} {hyphenPattern} Contrata".Trim(),
+            FinalTeam = fullTeamName.Trim()
+        };
+    }
+
+    private async Task<Guid?> GetUserIdAsync(string userDomain)
+    {
+        var userQuery = new QueryExpression("systemuser")
+        {
+            ColumnSet = new ColumnSet("systemuserid"),
+            Criteria = new FilterExpression()
+        };
+        userQuery.Criteria.AddCondition("domainname", ConditionOperator.Equal, userDomain);
+
+        var userResults = await Task.Run(() => serviceClient.RetrieveMultiple(userQuery));
+        if (userResults.Entities.Count == 0)
+        {
+            Console.WriteLine($"User not found: {userDomain}");
+            return null;
+        }
+        return userResults.Entities[0].Id;
+    }
+
+    private async Task<Guid?> GetTeamIdAsync(string teamName)
+    {
+        var teamQuery = new QueryExpression("team")
+        {
+            ColumnSet = new ColumnSet("teamid"),
+            Criteria = new FilterExpression()
+        };
+        teamQuery.Criteria.AddCondition("name", ConditionOperator.Equal, teamName);
+
+        var teamResults = await Task.Run(() => serviceClient.RetrieveMultiple(teamQuery));
+        return teamResults.Entities.Count > 0 ? teamResults.Entities[0].Id : (Guid?)null;
+    }
+
+    private async Task<bool> AssignUserToSingleTeamAsync(Guid userId, Guid teamId, string userDomain, string teamName)
+    {
+        try
+        {
+            // Check if already a member
+            if (await IsUserTeamMemberAsync(userId, teamId)) return true;
+
+            await Task.Run(() => serviceClient.Execute(new AssociateRequest
+            {
+                Target = new EntityReference("team", teamId),
+                RelatedEntities = new EntityReferenceCollection { new EntityReference("systemuser", userId) },
+                Relationship = new Relationship("teammembership_association")
+            }));
+
+            Console.WriteLine($"User {userDomain} successfully assigned to team {teamName}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to assign user {userDomain} to team {teamName}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<bool> RemoveUserFromTeamAsync(Guid userId, Guid teamId, string userDomain, string teamName)
+    {
+        try
+        {
+            if (!await IsUserTeamMemberAsync(userId, teamId)) return true;
+
+            await Task.Run(() => serviceClient.Execute(new DisassociateRequest
+            {
+                Target = new EntityReference("team", teamId),
+                RelatedEntities = new EntityReferenceCollection { new EntityReference("systemuser", userId) },
+                Relationship = new Relationship("teammembership_association")
+            }));
+
+            Console.WriteLine($"User {userDomain} successfully removed from team {teamName}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to remove user {userDomain} from team {teamName}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<bool> IsUserTeamMemberAsync(Guid userId, Guid teamId)
+    {
+        var membershipQuery = new QueryExpression("teammembership")
+        {
+            Criteria = new FilterExpression()
+        };
+        membershipQuery.Criteria.AddCondition("systemuserid", ConditionOperator.Equal, userId);
+        membershipQuery.Criteria.AddCondition("teamid", ConditionOperator.Equal, teamId);
+
+        var membershipResults = await Task.Run(() => serviceClient.RetrieveMultiple(membershipQuery));
+        return membershipResults.Entities.Count > 0;
+    }
+}
 public class ProcessedUser
 {
     public string UserDomain { get; set; }

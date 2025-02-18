@@ -14,6 +14,7 @@ public class Program
 public class MainMenuHandler
 {
     private List<BuUserDomains>? buUserDomainsList;
+    private List<TransformedTeamData>? transformedTeamData; 
 
 
     public async Task RunAsync()
@@ -69,10 +70,10 @@ public class MainMenuHandler
                 if (ConnectionCheck.EnsureConnected())
                 {
                     Console.Clear();
-                    var transformedTeams = await ExtractUsersFromTeam.FormatTeamData();
-                    if (transformedTeams != null && transformedTeams.Any())
+                    transformedTeamData = await ExtractUsersFromTeam.FormatTeamData();
+                    if (transformedTeamData != null && transformedTeamData.Any())
                     {
-                        await ExtractUsersFromTeam.CreateExcel(transformedTeams);
+                        buUserDomainsList = await ExtractUsersFromTeam.CreateExcel(transformedTeamData);
                     }
                 }
                 return false;
@@ -80,13 +81,18 @@ public class MainMenuHandler
             case "3":
                 if (ConnectionCheck.EnsureConnected())
                 {
-                    List<TransformedTeamData> transformedBus = await ExtractUsersFromTeam.FormatTeamData();
-                    buUserDomainsList = await ExtractUsersFromTeam.CreateExcel(transformedBus);
                     Console.Clear();
+                    if (transformedTeamData == null || buUserDomainsList == null)
+                    {
+                        Console.WriteLine("Please run option 2 first to extract the required data.");
+                        Console.WriteLine("Press any key to continue...");
+                        Console.ReadKey();
+                        return false;
+                    }
+
                     var assignTeamToUser = new AssignNewTeamToUser(buUserDomainsList);
-                    var processedUsers = await assignTeamToUser.ProcessUsersAsync();  
+                    await assignTeamToUser.ProcessUsersAsync();
                 }
-                
                 return false;
 
             case "4":
@@ -195,7 +201,7 @@ public class MainMenuHandler
                 if (results != null && results.Count > 0)
                 {
                     // Process SAP normalization only if users were normalized
-                    UserSAPNormalizer.ProcessUsersAsync(results);
+                    await UserSAPNormalizer.ProcessUsersAsync(results);
                     // Run workflow for normalized users
                     await RunNewUserWorkFlow.ExecuteWorkflowForUsersAsync(results);
                 }
@@ -328,7 +334,7 @@ public class MainMenuHandler
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
         Console.WriteLine("1.  Create/Update Team Process (BU, Contrata team, EDPR Team) (1-5 is only for EU teams only)");
         Console.WriteLine("2.  Extract users from BU and it's contrata Contrata team");
-        Console.WriteLine("3.  Give newly created team to extracted users (if any were extracted in step 2");
+        Console.WriteLine("3.  Give newly created team to extracted users (if any were extracted in step 2)");
         Console.WriteLine("4.  Create views for workorders and notifications (ordens de trabajo e avisos)");
         Console.WriteLine("--- Run the worflows in XRM Toolbox ---");
         Console.WriteLine("5.  Change BU of users that have in their name the Contractor (Puesto de trabajo)");
