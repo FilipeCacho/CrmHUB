@@ -83,7 +83,7 @@ public class AssignNewTeamToUser
                     });
 
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write($"User {userDomain} successfully processed for park\n");
+                    Console.Write($"\nUser {userDomain} successfully processed for park\n");
                     Console.ResetColor();
                     Console.Write(buUserDomain.NewCreatedPark);
                 }
@@ -201,24 +201,28 @@ public class AssignNewTeamToUser
 
     private TeamNames ExtractTeamNames(string fullTeamName)
     {
-        // Split by "Contrata" while preserving casing from original string
-        var parts = fullTeamName.Split(new[] { " Contrata " }, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2) return new TeamNames();  // Return empty object instead of null
-
-        var basePattern = parts[0];
+        // Remove ZP1 from the input first if it exists
+        var basePattern = Regex.Replace(fullTeamName, @"\s*ZP1\b", "").Trim();
+        fullTeamName = Regex.Replace(fullTeamName, @"\s*ZP1\b", "").Trim();
 
         // Find the hyphenated pattern (e.g., "0-ES-BDY-01")
-        var hyphenMatch = Regex.Match(basePattern, @"\d+-[A-Z]+-[A-Z]+-\d+");
-        if (!hyphenMatch.Success) return new TeamNames();  // Return empty object instead of null
+        var hyphenMatch = Regex.Match(basePattern, @"\d+\-[A-Z]+\-[A-Z]+\-\d+");
+        if (!hyphenMatch.Success) return new TeamNames(); // Return empty object instead of null
 
         var hyphenPattern = hyphenMatch.Value;
         var beforeHyphen = basePattern.Substring(0, hyphenMatch.Index).Trim();
 
+        // Check for ZPx pattern after the hyphen pattern
+        var afterHyphenPart = basePattern.Substring(hyphenMatch.Index + hyphenMatch.Length).Trim();
+        var zpxMatch = Regex.Match(afterHyphenPart, @"^\s*ZP\w\b");
+
         return new TeamNames
         {
             BaseTeam = $"{beforeHyphen} {hyphenPattern}".Trim(),
-            IntermediateTeam = $"{beforeHyphen} {hyphenPattern} Contrata".Trim(),
-            FinalTeam = fullTeamName.Trim()
+            IntermediateTeam = zpxMatch.Success
+                ? $"{beforeHyphen} {hyphenPattern} {zpxMatch.Value} Contrata".Trim()
+                : $"{beforeHyphen} {hyphenPattern} Contrata".Trim(),
+            FinalTeam = fullTeamName
         };
     }
 

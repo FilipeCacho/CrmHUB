@@ -76,7 +76,7 @@ public sealed class ChangeUsersBuToNewTeam
                 return;
             }
 
-            var user = users[0]; // Take the first user if multiple are found
+            var user = users[0];
             string fullName = user.GetAttributeValue<string>("fullname") ?? string.Empty;
             var currentBu = user.GetAttributeValue<EntityReference>("businessunitid");
 
@@ -85,34 +85,51 @@ public sealed class ChangeUsersBuToNewTeam
             Console.ResetColor();
             Console.WriteLine($"{fullName}, Current BU: {currentBu.Name}");
 
-            // Find matching team with null check
+            // Find matching team
             var matchingTeam = FindMatchingTeam(currentBu.Name, transformedTeams);
-            if (matchingTeam == null)
+
+            if (matchingTeam != null)
             {
-                LogWarning($"No matching team found for BU {currentBu.Name}. Skipping user {fullName}.");
-                Console.WriteLine("Available teams:");
-                foreach (var team in transformedTeams)
+                // Normal flow - BU matches
+                Console.WriteLine($"Found matching team with contractor: {matchingTeam.Value.Contractor}");
+                if (!UserNameContainsContractor(fullName, matchingTeam.Value.Contractor))
                 {
-                    Console.WriteLine($"- {team.EquipaContrataContrata}");
+                    Console.WriteLine($"User {fullName} name does not contain contractor {matchingTeam.Value.Contractor}. Skipping.");
+                    return;
                 }
-                return;
-            }
 
-            // Now that we know matchingTeam is not null, we can safely use its properties
-            Console.WriteLine($"Found matching team with contractor: {matchingTeam.Value.Contractor}");
-            if (!UserNameContainsContractor(fullName, matchingTeam.Value.Contractor))
+                string newBuName = DeriveNewBuName(originalNewCreatedPark);
+                await ChangeBuAndReapplyRolesAsync(user, newBuName, originalNewCreatedPark);
+            }
+            else
             {
-                Console.WriteLine($"User {fullName} name does not contain contractor {matchingTeam.Value.Contractor}. Skipping.");
-                return;
+                // BU doesn't match - just check and remove team if present
+                Console.WriteLine($"No matching team found for BU {currentBu.Name}. Checking for team membership only.");
+                await RemoveContrataContrataTeamIfPresentAsync(user, originalNewCreatedPark);
             }
-
-            string newBuName = DeriveNewBuName(originalNewCreatedPark);
-            await ChangeBuAndReapplyRolesAsync(user, newBuName, originalNewCreatedPark);
         }
         catch (Exception ex)
         {
             LogError($"Error processing user {userDomain}", ex);
             throw;
+        }
+    }
+
+    private async Task RemoveContrataContrataTeamIfPresentAsync(Entity user, string newCreatedPark)
+    {
+        string contrataContrataTeam = DeriveContrataContrataTeam(newCreatedPark);
+        var userTeams = await GetUserTeamsAsync(user.Id);
+        var teamToRemove = userTeams.FirstOrDefault(t =>
+            string.Equals(t.GetAttributeValue<string>("name"), contrataContrataTeam, StringComparison.OrdinalIgnoreCase));
+
+        if (teamToRemove is not null)
+        {
+            await RemoveTeamFromUserAsync(user.Id, teamToRemove.Id);
+            Console.WriteLine($"Removed team '{contrataContrataTeam}' from user {user.GetAttributeValue<string>("yomifullname")} without changing BU.");
+        }
+        else
+        {
+            Console.WriteLine($"User is not a member of team '{contrataContrataTeam}'. No action needed.");
         }
     }
 

@@ -21,9 +21,18 @@ public static class ExtractUsersFromTeam
         foreach (var team in validTeams)
         {
             string baseBuName = team.ColumnA;
+
+            //add planner group if different than ZP1, append this right away to BU level 4 so all the other team names that are generated from it have the planner group
+            if (team.ColumnC != "ZP1")
+                baseBuName = $"{baseBuName} {team.ColumnC}";
+
+     
             string buWithContrata = $"{baseBuName} Contrata";
             string teamName = $"Equipo contrata {baseBuName} Contrata";
             string fullBuName = $"{baseBuName} Contrata {team.ColumnB}";
+
+            
+
 
             dynamicTeams.Add(new TransformedTeamData
             {
@@ -31,7 +40,7 @@ public static class ExtractUsersFromTeam
                 EquipaContrataContrata = teamName,
                 FileName = baseBuName,
                 FullBuName = fullBuName,
-               
+                               
             });
 
         }
@@ -233,11 +242,15 @@ public static class ExtractUsersFromTeam
     {
         foreach (var team in dynamicTeams)
         {
+            Console.Write("\nTransformed Team Data:\n");
             Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine("\nTransformed Team Data:");
+            Console.Write("BU");
             Console.ResetColor();
-            Console.WriteLine($"bu: {team.Bu}");
-            Console.WriteLine($"Equipa contrata Contrata: {team.EquipaContrataContrata}");
+            Console.WriteLine($": {team.Bu}");
+            Console.ForegroundColor = ConsoleColor.Blue;
+            Console.Write("Equipa contrata Contrata");
+            Console.ResetColor();
+            Console.WriteLine($": {team.EquipaContrataContrata}");
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Users will be stored in the file: {team.FileName}.xls\n");
             Console.ResetColor();
