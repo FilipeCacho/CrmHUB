@@ -179,9 +179,7 @@ public class MainMenuHandler
             case "11":
                 if (ConnectionCheck.EnsureConnected())
                 {
-                    Console.Clear();
-                    var processor = new WorkOrderAuditProcessor();
-                    await processor.RunAsync();
+                    //por usar
                 }
                 return false;
 
@@ -216,8 +214,7 @@ public class MainMenuHandler
           
             case "15":
                 Console.Clear();
-                var adjuster = new HardcodedExcelAdjuster();
-                adjuster.ProcessExcelFile();
+                //por usar
                 return false;
         
                 
@@ -348,11 +345,11 @@ public class MainMenuHandler
         Console.WriteLine("9.  Prepare NAS file extraction");
         Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
-        Console.WriteLine("11. Apanhar ordens mal 700");
+        Console.WriteLine("11.//// por usar");
         Console.WriteLine("12. Assign same role to multiple users");
         Console.WriteLine("13. Normalize Users");
         Console.WriteLine("14. Open Park Explorer");
-        Console.WriteLine("15. Hardcoded excel adjuster");
+        Console.WriteLine("15. ///Por usar");
         Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }
