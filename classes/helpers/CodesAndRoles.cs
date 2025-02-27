@@ -57,8 +57,3 @@
         //new user workflow name
         public static readonly string NewUserWorkflow = "Usuario-Proceso para crear un recurso desde el usuario";
     }  
-
-
-
-
-

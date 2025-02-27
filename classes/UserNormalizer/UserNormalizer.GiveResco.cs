@@ -47,6 +47,7 @@ public sealed partial class UserNormalizerV2
 
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("\nRESCO role and team were given to the EU user");
+                    Console.WriteLine("(Don't forget to give a RESCO license in Woodford, this code can't do that)");
                     Console.ResetColor();
                     break;
 
@@ -56,6 +57,7 @@ public sealed partial class UserNormalizerV2
 
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("\nRESCO role and team were given to the NA user");
+                    Console.WriteLine("(Don't forget to give a RESCO license in Woodford, this code can't do that)");
                     Console.ResetColor();
                     break;
 

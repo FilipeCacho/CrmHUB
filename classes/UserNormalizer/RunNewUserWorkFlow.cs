@@ -146,7 +146,8 @@ public sealed class RunNewUserWorkFlow
         return message.Contains("ya hay otro registro de recurso asociado a este usuario") ||
                message.Contains("there is already another resource record associated to this user") ||
                message.Contains("ya existe un registro creado con el nombre seleccionado") ||
-               message.Contains("a record was not created or updated because a duplicate of the current record already exists");
+               message.Contains("a record was not created or updated because a duplicate of the current record already exists") ||
+               message.Contains("there is already a record created with the selected name");
     }
 
     private static Entity? GetSystemUser(ServiceClient serviceClient, string username)
