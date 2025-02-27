@@ -179,7 +179,8 @@ public class MainMenuHandler
             case "11":
                 if (ConnectionCheck.EnsureConnected())
                 {
-                    //por usar
+                    Console.Clear();
+                    await UserCopier();
                 }
                 return false;
 
@@ -213,11 +214,37 @@ public class MainMenuHandler
 
           
             case "15":
-                Console.Clear();
-                //por usar
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+
+                    await HoldUserRoles();
+                }
                 return false;
-        
+
+            case "16":
+                if (ConnectionCheck.EnsureConnected())
+                {
+                    Console.Clear();
+                    await RescoLoginAsync();
+                }
+                return false;
+
+            case "17":
+                await JiraRitmLogger();
+
+                return false;
+
+            case "18":
+           
+                Console.Clear();
+                await AssignTeamsFromExcel();
                 
+            return false;
+
+
+
+
 
             case "0":
                 return true; // Signal to exit
@@ -233,6 +260,54 @@ public class MainMenuHandler
         {
             var userInfoRetriever = new UserBasicInfoRetriever();
             await userInfoRetriever.RetrieveAndCompareUserInfoAsync();
+        }
+    }
+
+    private async Task UserCopier()
+    {
+        try
+        {
+            var copier = new UserPermissionCopier();
+            await copier.Run();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error in User Copier: {ex.Message}");
+            Console.ResetColor();
+            Console.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
+    private async Task RescoLoginAsync()
+    {
+        try
+        {
+            await new RescoLicenseProcessor().ProcessRescoLicensesAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+        Console.WriteLine("\nPress any key to exit...");
+        Console.ReadKey();
+    }
+
+    private async Task HoldUserRoles()
+    {
+        try
+        {
+            var userRoleManager = new UserRoleManager();
+            await userRoleManager.Run();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error in User Role Manager: {ex.Message}");
+            Console.ResetColor();
+            Console.WriteLine("Press any key to continue...");
+            Console.ReadKey();
         }
     }
 
@@ -307,6 +382,31 @@ public class MainMenuHandler
         }
     }
 
+    private async Task JiraRitmLogger()
+    {
+        using (var jiraLogger = new JiraRitmLogger())
+        {
+            await jiraLogger.LogHoursMenu();
+        }
+    }
+
+    private async Task AssignTeamsFromExcel()
+    {
+        try
+        {
+            var assignTeams = new AssignTeams();
+            await assignTeams.ProcessAssignTeamsAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"An error occurred: {ex.Message}");
+            Console.ResetColor();
+            Console.WriteLine("Press any key to return to the menu.");
+            Console.ReadKey();
+        }
+    }
+
     private void ShowMainMenu()
     {
         try
@@ -345,11 +445,14 @@ public class MainMenuHandler
         Console.WriteLine("9.  Prepare NAS file extraction");
         Console.WriteLine("10. NAS File local Organizer");
         Console.WriteLine("-----------------------------------------------------------------------------------------------------");
-        Console.WriteLine("11.//// por usar");
+        Console.WriteLine("11. Copy BU, Teams and Roles from one user to the other");
         Console.WriteLine("12. Assign same role to multiple users");
         Console.WriteLine("13. Normalize Users");
-        Console.WriteLine("14. Open Park Explorer");
-        Console.WriteLine("15. ///Por usar");
+        Console.WriteLine("14. Open Park Explorer (this is a proof-of-concept for adding React UI to this console)");
+        Console.WriteLine("15. Hold user current roles while the BU is replaced and then reapply them");
+        Console.WriteLine("16. Get Users Resco last login (for massive extraction when asked by the bussiness)");
+        Console.WriteLine("17. Register RITM hours in JIRA");
+        Console.WriteLine("18. Assign Teams to Users in the 'Assign Teams' worksheet");
         Console.WriteLine("0.  Exit");
         Console.Write("\nChoice: ");
     }

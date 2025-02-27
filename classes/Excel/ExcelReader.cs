@@ -31,6 +31,50 @@ public class ExcelReader : IDisposable
         filePath = ExcelTemplateManager.GetExcelFilePath();
     }
 
+    public static List<AssignTeamData> ReadAssignTeamsData()
+    {
+        lock (excelLock)
+        {
+            try
+            {
+                using (var package = new ExcelPackage(new FileInfo(filePath)))
+                {
+                    ExcelWorksheet worksheet = package.Workbook.Worksheets["Assign Teams"];
+                    if (worksheet == null)
+                    {
+                        throw new ArgumentException("The specified tab 'Assign Teams' does not exist");
+                    }
+
+                    List<AssignTeamData> assignTeamDataList = new List<AssignTeamData>();
+                    int rowCount = worksheet.Dimension?.Rows ?? 0;
+
+                    for (int row = 2; row <= rowCount; row++)
+                    {
+                        string rawUsername = worksheet.Cells[row, 1].Text;
+                        string rawTeamName = worksheet.Cells[row, 2].Text;
+
+                        if (!string.IsNullOrWhiteSpace(rawUsername) && !string.IsNullOrWhiteSpace(rawTeamName))
+                        {
+                            assignTeamDataList.Add(new AssignTeamData
+                            {
+                                Username = rawUsername.Replace(" ", ""),
+                                TeamName = string.Join(" ", rawTeamName.Trim().Split(new[] { ' ' },
+                                    StringSplitOptions.RemoveEmptyEntries))
+                            });
+                        }
+                    }
+
+                    package.Workbook.Dispose();
+                    return assignTeamDataList;
+                }
+            }
+            finally
+            {
+                ForceGarbageCollection();
+            }
+        }
+    }
+
     public static List<TeamRow> ReadBuInfoExcel()
     {
         if (!semaphore.Wait(TimeSpan.FromSeconds(30), CancellationToken.None))
@@ -206,6 +250,33 @@ public class ExcelReader : IDisposable
         return true;
     }
 
+    // extract jira credentials from the excel file
+    public static (string jiraUrl, string personalAccessToken) ReadJiraCredentials()
+    {
+        lock (excelLock)
+        {
+            try
+            {
+                using (var package = new ExcelPackage(new FileInfo(filePath)))
+                {
+                    ExcelWorksheet worksheet = package.Workbook.Worksheets["Login"];
+                    if (worksheet == null)
+                    {
+                        throw new ArgumentException("The specified worksheet 'Login' does not exist");
+                    }
+                    return (
+                        jiraUrl: worksheet.Cells["A2"].Text,
+                        personalAccessToken: worksheet.Cells["B2"].Text
+                        );
+                }
+            }
+            finally
+            {
+                ForceGarbageCollection();
+            }
+        }
+    }
+
     public static List<string>? ValidateNasDownloads()
     {
         if (!semaphore.Wait(TimeSpan.FromSeconds(30), CancellationToken.None))
@@ -345,6 +416,8 @@ public class ExcelReader : IDisposable
         }
     }
 }
+
+
 
 public class TeamRow
 {
