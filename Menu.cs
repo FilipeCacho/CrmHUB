@@ -243,9 +243,6 @@ public class MainMenuHandler
             return false;
 
 
-
-
-
             case "0":
                 return true; // Signal to exit
             default:

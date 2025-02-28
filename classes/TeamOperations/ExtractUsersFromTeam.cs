@@ -127,8 +127,7 @@ public static class ExtractUsersFromTeam
                 Console.ResetColor();
             }
 
-            Console.WriteLine("\nPress any key to continue with the next item...");
-            Console.ReadKey();
+            
         }
 
         if (validTeams.Any())

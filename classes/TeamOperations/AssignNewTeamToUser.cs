@@ -71,6 +71,14 @@ public class AssignNewTeamToUser
         foreach (var buUserDomain in buUserDomainsList)
         {
             string equipaContrata = parkToEquipoContrata[buUserDomain.NewCreatedPark];
+
+            // Add a header for each park
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine("\n========================================================");
+            Console.WriteLine($"PROCESSING PARK: {buUserDomain.NewCreatedPark}");
+            Console.WriteLine("========================================================");
+            Console.ResetColor();
+
             foreach (var userDomain in buUserDomain.UserDomains)
             {
                 bool assigned = await AssignUserToTeamAsync(userDomain, equipaContrata);
@@ -83,20 +91,24 @@ public class AssignNewTeamToUser
                     });
 
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write($"\nUser {userDomain} successfully processed for park\n");
+                    Console.WriteLine($"✓ User {userDomain} successfully processed");
                     Console.ResetColor();
-                    Console.Write(buUserDomain.NewCreatedPark);
                 }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"User {userDomain} could not be processed for park {buUserDomain.NewCreatedPark}. Check previous errors for details.");
+                    Console.WriteLine($"⚠ User {userDomain} could not be processed. See errors above.");
+                    Console.ResetColor();
                 }
             }
         }
 
+        // Summary section
         Console.ForegroundColor = ConsoleColor.Blue;
-        Console.WriteLine("\nPress any key to continue...");
+        Console.WriteLine("\n========================================================");
+        Console.WriteLine($"SUMMARY: {processedUsers.Count} users successfully processed");
+        Console.WriteLine("========================================================");
+        Console.WriteLine("Press any key to continue...");
         Console.ResetColor();
         Console.ReadKey();
 
@@ -262,7 +274,11 @@ public class AssignNewTeamToUser
         try
         {
             // Check if already a member
-            if (await IsUserTeamMemberAsync(userId, teamId)) return true;
+            if (await IsUserTeamMemberAsync(userId, teamId))
+            {
+                Console.WriteLine($"  - Already member of: {teamName}");
+                return true;
+            }
 
             await Task.Run(() => serviceClient.Execute(new AssociateRequest
             {
@@ -271,12 +287,14 @@ public class AssignNewTeamToUser
                 Relationship = new Relationship("teammembership_association")
             }));
 
-            Console.WriteLine($"User {userDomain} successfully assigned to team {teamName}");
+            Console.WriteLine($"  - Assigned to team: {teamName}");
             return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to assign user {userDomain} to team {teamName}: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  - ERROR: Failed to assign to {teamName}: {ex.Message}");
+            Console.ResetColor();
             return false;
         }
     }
