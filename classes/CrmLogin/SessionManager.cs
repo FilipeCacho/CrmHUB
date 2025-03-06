@@ -159,15 +159,24 @@ public class SessionManager : IDisposable
     {
         try
         {
-            // Force new connection when trying to connect explicitly
-            _serviceClient?.Dispose();
-            _serviceClient = null;
-            _isConnected = false;
-            _lastConnectionAttempt = DateTime.MinValue; // Reset throttling
-            _authState = AuthenticationState.RequiresInteractive; // Force interactive auth for explicit connect request
+            lock (_lock) // Make sure we lock here
+            {
+                // If already connected successfully with a token, don't reconnect
+                if (_isConnected && _serviceClient != null && string.IsNullOrEmpty(_serviceClient.LastError))
+                {
+                    return true;
+                }
 
-            ConnectToService();
-            return true;
+                // Otherwise, force new connection when trying to connect explicitly
+                _serviceClient?.Dispose();
+                _serviceClient = null;
+                _isConnected = false;
+                _lastConnectionAttempt = DateTime.MinValue; // Reset throttling
+                _authState = AuthenticationState.RequiresInteractive; // Force interactive auth for explicit connect request
+
+                ConnectToService();
+                return true;
+            }
         }
         catch (Exception ex)
         {
@@ -289,7 +298,20 @@ public class SessionManager : IDisposable
             }
 
             _logger.LogInformation("Attempting to connect using cached token");
-            string connectionString = BuildTokenConnectionString(_tokenCachePath, true);
+
+            // Use a minimal connection string for token-based auth with no browser
+            string connectionString = $"AuthType=OAuth;" +
+                $"Url={EnvironmentsDetails.DynamicsUrl};" +
+                $"AppId={EnvironmentsDetails.AppId};" +
+                $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+                $"TokenCacheStorePath={_tokenCachePath};" +
+                $"UseWebApi=true;" +
+                $"PreferConnectionFromTokenCache=true;" +
+                $"LoginPrompt=Never;" +
+                $"Browser=NoBrowser;" +
+                $"NoPrompt=true;" +
+                $"RequireNewInstance=false";
+
             _serviceClient?.Dispose();
             _serviceClient = new ServiceClient(connectionString);
 
@@ -299,22 +321,6 @@ public class SessionManager : IDisposable
                 _tokenExpirationTime = DateTime.Now.AddHours(1);
                 SaveTokenLifetime();
                 _logger.LogInformation("Successfully connected using cached token");
-                return true;
-            }
-
-            _logger.LogInformation("Token seems valid but needs refresh, attempting silent refresh");
-            string refreshConnectionString = connectionString +
-                ";ForceTokenRefresh=true;Browser=NoBrowser;Prompt=none;";
-
-            _serviceClient?.Dispose();
-            _serviceClient = new ServiceClient(refreshConnectionString);
-
-            if (_serviceClient.IsReady && VerifyConnectionQuietly())
-            {
-                _isConnected = true;
-                _tokenExpirationTime = DateTime.Now.AddHours(1);
-                SaveTokenLifetime();
-                _logger.LogInformation("Successfully connected using refreshed token");
                 return true;
             }
 
@@ -561,33 +567,43 @@ public class SessionManager : IDisposable
         }
     }
 
+    // forced authentication works properly
+
     private string BuildTokenConnectionString(string tokenCachePath, bool silent = false)
     {
         // Ensure we're using the correct path for the current environment
         EnsureCorrectEnvironmentPaths();
 
+        // For silent token-based auth, use a streamlined minimal connection string with explicit browser prevention
+        if (silent)
+        {
+            return $"AuthType=OAuth;" +
+            $"Url={EnvironmentsDetails.DynamicsUrl};" +
+            $"AppId={EnvironmentsDetails.AppId};" +
+            $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
+            $"TokenCacheStorePath={_tokenCachePath};" +
+            $"UseWebApi=true;" +
+            $"PreferConnectionFromTokenCache=true";
+        }
+
+        // For interactive auth
         return $"AuthType=OAuth;" +
         $"Url={EnvironmentsDetails.DynamicsUrl};" +
         $"AppId={EnvironmentsDetails.AppId};" +
         $"RedirectUri={EnvironmentsDetails.RedirectUri};" +
         $"TokenCacheStorePath={_tokenCachePath};" +
         $"RequireNewInstance=True;" +
-        $"LoginPrompt=Never;" +
+        $"LoginPrompt=Auto;" +
         $"UseWebApi=true;" +
         $"CacheRetrievalTimeout=120;" +
         $"TokenCacheTimeout=120;" +
         $"SkipDiscovery=true;" +
         $"MaxRetries=3;" +
         $"RetryDelay=10;" +
-        $"PreventBrowserPrompt={silent};" +
-        $"PreferConnectionFromTokenCache=true;" +
+        $"PreferConnectionFromTokenCache=false;" +
         $"OfflineAccess=true;" +
-        $"UseDefaultWebBrowser=false;" +
-        $"NoPrompt={silent};" +
-        $"Browser={(silent ? "NoBrowser" : "DefaultBrowser")};" +
-        $"Prompt={(silent ? "none" : "login")};" +
-        $"TokenRefreshAttempts=3;" +
-        $"InteractiveLogin={!silent};" +
+        $"UseDefaultWebBrowser=true;" +
+        $"InteractiveLogin=true;" +
         $"ForceTokenRefresh=false;" +
         $"DisableTokenStorageProvider=false;" +
         $"EnableConnectionStatusEvents=true;" +
