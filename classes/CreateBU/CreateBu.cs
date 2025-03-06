@@ -47,7 +47,7 @@ public sealed class CreateBu
                         Console.WriteLine("\nCancellation requested. Completing current operation...");
                         break;
                     }
-                    await Task.Delay(100, cts.Token); // Use Task.Delay instead of Thread.Sleep
+                    await Task.Delay(100, cts.Token);
                 }
             }
             catch (OperationCanceledException)
