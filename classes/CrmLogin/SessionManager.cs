@@ -74,6 +74,7 @@ public class SessionManager : IDisposable
 
     private void UpdateTokenPaths()
     {
+        _currentEnvironment = EnvironmentsDetails.CurrentEnvironment;
         var envPath = Path.Combine(_baseTokenPath, EnvironmentsDetails.CurrentEnvironment);
 
         // Create environment directory if it doesn't exist
@@ -89,12 +90,12 @@ public class SessionManager : IDisposable
         _logger.LogInformation($"New token cache path: {_tokenCachePath}");
     }
 
+
     private void EnsureCorrectEnvironmentPaths()
     {
         if (_currentEnvironment != EnvironmentsDetails.CurrentEnvironment)
         {
             _logger.LogInformation($"Environment changed from {_currentEnvironment} to {EnvironmentsDetails.CurrentEnvironment}");
-            _currentEnvironment = EnvironmentsDetails.CurrentEnvironment;
             UpdateTokenPaths();
 
             // Reset all connection state
@@ -148,6 +149,9 @@ public class SessionManager : IDisposable
             _tokenExpirationTime = DateTime.MinValue;
             _lastConnectionAttempt = DateTime.MinValue;
             _authState = AuthenticationState.NotAuthenticated;
+
+            // trying to make sure the token paths reflect currently being used environment before i do the next connection attempt
+            UpdateTokenPaths();
         }
     }
 
@@ -160,6 +164,7 @@ public class SessionManager : IDisposable
             _serviceClient = null;
             _isConnected = false;
             _lastConnectionAttempt = DateTime.MinValue; // Reset throttling
+            _authState = AuthenticationState.RequiresInteractive; // Force interactive auth for explicit connect request
 
             ConnectToService();
             return true;
@@ -220,7 +225,7 @@ public class SessionManager : IDisposable
                 _serviceClient = null;
                 _isConnected = false;
 
-                // Always try interactive auth when switching environments
+                // Always try credential-based authentication first
                 var (username, password) = CredentialManager.LoadCredentials();
                 if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
                 {
@@ -228,12 +233,11 @@ public class SessionManager : IDisposable
                     return;
                 }
 
-                string connectionString = BuildCredentialConnectionString(username!, password!);
-                _serviceClient = new ServiceClient(connectionString);
-
-                if (!_serviceClient.IsReady)
+                // Try connecting with stored credentials
+                if (!TryStoredCredentialsWithRetry(username!, password!))
                 {
-                    throw new Exception(_serviceClient.LastError ?? "Service client initialization failed");
+                    // If credential login fails, handle credential failure
+                    HandleCredentialFailure();
                 }
 
                 VerifyConnection();
@@ -594,7 +598,7 @@ public class SessionManager : IDisposable
         $"CacheRetrievalTimeout=120;" +
         $"TokenCacheTimeout=120;" +
         $"InteractiveLogin=true;" +
-        $"PreferConnectionFromTokenCache=false;" +
+        $"PreferConnectionFromTokenCache=false;" + // Set to false to ensure fresh connection
         $"OfflineAccess=true;" +
         $"TokenRefreshAttempts=3;" +
         $"MaxRetries=3;" +

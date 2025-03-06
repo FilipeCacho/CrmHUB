@@ -63,17 +63,30 @@ public static class CredentialsOperation
 
             if (Directory.Exists(tokenPath))
             {
-                // Securely delete all files in the directory
-                foreach (string file in Directory.GetFiles(tokenPath, "*.*", SearchOption.AllDirectories))
-                {
-                    if (IsTokenFile(file))
-                    {
-                        SecureDeleteFile(file);
-                    }
-                }
-
                 try
                 {
+                    // Force delete any locks on token files
+                    foreach (string file in Directory.GetFiles(tokenPath, "*.*", SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            if (IsTokenFile(file))
+                            {
+                                SecureDeleteFile(file);
+                            }
+                            else
+                            {
+                                // Delete non-token files as well
+                                File.Delete(file);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Warning: Could not delete file {Path.GetFileName(file)}: {ex.Message}");
+                        }
+                    }
+
+                    // Try to delete directory after files
                     Directory.Delete(tokenPath, recursive: true);
                     Console.WriteLine($"Token cache for {env} environment securely cleared.");
                 }

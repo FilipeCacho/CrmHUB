@@ -32,14 +32,22 @@
 
         try
         {
-            // Step 1: Disconnect and cleanup
+            // Step 1: Disconnect from current environment
+            Console.WriteLine($"Disconnecting from {EnvironmentsDetails.CurrentEnvironment} environment...");
             SessionManager.Instance.Disconnect();
 
-            // Step 2: Update environment setting
+            // Step 2: Clean up token cache for current environment
+            Console.WriteLine("Cleaning up token cache...");
+            CleanupTokenCache(EnvironmentsDetails.CurrentEnvironment);
+
+            // Step 3: Update environment setting
+            string oldEnv = EnvironmentsDetails.CurrentEnvironment;
             EnvironmentsDetails.CurrentEnvironment = newEnv;
 
-            // Step 3: Force new connection
+            // Step 4: Force new connection
             Console.WriteLine($"\nConnecting to {newEnv} environment...");
+            Console.WriteLine("You may be prompted for MFA verification, but existing credentials will be reused if possible.");
+
             if (SessionManager.Instance.TryConnect())
             {
                 Console.WriteLine($"\nSuccessfully connected to {newEnv} environment!");
@@ -47,20 +55,24 @@
             }
             else
             {
+                // Revert environment setting if connection fails
+                EnvironmentsDetails.CurrentEnvironment = oldEnv;
                 throw new Exception($"Failed to connect to {newEnv} environment");
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"\nError switching environment: {ex.Message}");
+
+            // Try to recover the previous connection
+            AttemptRecovery();
+
             Console.WriteLine("Press any key to continue...");
             Console.ReadKey();
         }
     }
 
-
-
-private static void CleanupTokenCache(string environment)
+    private static void CleanupTokenCache(string environment)
     {
         try
         {
@@ -81,19 +93,59 @@ private static void CleanupTokenCache(string environment)
                     {
                         try
                         {
-                            File.Delete(file);
+                            // Try to securely delete sensitive token files
+                            SecureDeleteFile(file);
                         }
                         catch (Exception ex)
                         {
                             Console.WriteLine($"Warning: Could not delete file {file}: {ex.Message}");
+                            // Fallback to regular delete if secure delete fails
+                            try
+                            {
+                                File.Delete(file);
+                            }
+                            catch
+                            {
+                                Console.WriteLine($"Warning: Could not delete file {Path.GetFileName(file)}");
+                            }
                         }
                     }
                 }
             }
+
+            Console.WriteLine($"Token cache for {environment} environment cleared.");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Warning: Error cleaning up token cache: {ex.Message}");
+        }
+    }
+
+    private static void SecureDeleteFile(string filePath)
+    {
+        if (!File.Exists(filePath)) return;
+
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length > 0)
+            {
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Write);
+                // First overwrite with zeros
+                byte[] zeros = new byte[fileInfo.Length];
+                fs.Position = 0;
+                fs.Write(zeros, 0, zeros.Length);
+                // Then overwrite with ones (0xFF)
+                byte[] ones = Enumerable.Repeat((byte)0xFF, (int)fileInfo.Length).ToArray();
+                fs.Position = 0;
+                fs.Write(ones, 0, ones.Length);
+                fs.Flush(true);
+            }
+            File.Delete(filePath);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Failed to securely delete file: {ex.Message}", ex);
         }
     }
 

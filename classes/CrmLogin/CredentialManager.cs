@@ -31,7 +31,6 @@ public static class CredentialManager
             persistence: CredentialPersistence.LocalMachine);
     }
 
-    // Renamed from DeleteCredentials to RemoveCredentials to match the SessionManager usage
     public static void RemoveCredentials()
     {
         if (!OperatingSystem.IsWindows())
