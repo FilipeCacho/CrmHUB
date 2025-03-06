@@ -217,7 +217,6 @@ public class SessionManager : IDisposable
                     _lastConnectionAttempt = DateTime.MinValue;
                 }
 
-                // Remove throttling check here to allow immediate connection after environment switch
                 _lastConnectionAttempt = DateTime.Now;
 
                 // Clear existing connection
@@ -225,7 +224,14 @@ public class SessionManager : IDisposable
                 _serviceClient = null;
                 _isConnected = false;
 
-                // Always try credential-based authentication first
+                // STEP 1: Try to use cached token first
+                if (!IsTokenExpired() && TryTokenAuthentication())
+                {
+                    _logger.LogInformation("Successfully connected using cached token");
+                    return;
+                }
+
+                // STEP 2: If token authentication fails, try credentials
                 var (username, password) = CredentialManager.LoadCredentials();
                 if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
                 {
@@ -275,12 +281,14 @@ public class SessionManager : IDisposable
     {
         try
         {
-            if (!File.Exists(_tokenCachePath) || new FileInfo(_tokenCachePath).Length == 0)
+            if (!File.Exists(_tokenCachePath) || new FileInfo(_tokenCachePath).Length < 100)
             {
+                _logger.LogInformation("No valid token cache found or token cache is too small");
                 _authState = AuthenticationState.RequiresInteractive;
                 return false;
             }
 
+            _logger.LogInformation("Attempting to connect using cached token");
             string connectionString = BuildTokenConnectionString(_tokenCachePath, true);
             _serviceClient?.Dispose();
             _serviceClient = new ServiceClient(connectionString);
@@ -290,9 +298,11 @@ public class SessionManager : IDisposable
                 _isConnected = true;
                 _tokenExpirationTime = DateTime.Now.AddHours(1);
                 SaveTokenLifetime();
+                _logger.LogInformation("Successfully connected using cached token");
                 return true;
             }
 
+            _logger.LogInformation("Token seems valid but needs refresh, attempting silent refresh");
             string refreshConnectionString = connectionString +
                 ";ForceTokenRefresh=true;Browser=NoBrowser;Prompt=none;";
 
@@ -304,15 +314,17 @@ public class SessionManager : IDisposable
                 _isConnected = true;
                 _tokenExpirationTime = DateTime.Now.AddHours(1);
                 SaveTokenLifetime();
+                _logger.LogInformation("Successfully connected using refreshed token");
                 return true;
             }
 
+            _logger.LogInformation("Token authentication failed, will try credentials");
             _authState = AuthenticationState.RequiresInteractive;
             return false;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Token authentication failed");
+            _logger.LogError(ex, "Token authentication failed with exception");
             _authState = AuthenticationState.RequiresInteractive;
             return false;
         }

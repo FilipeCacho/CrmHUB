@@ -76,48 +76,42 @@
     {
         try
         {
-            // Get the token cache directory for the specified environment
+            // We're only cleaning up if there are obvious issues with the token cache
             string tokenCacheDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "CrmHub",
                 environment);
 
-            // Delete all token-related files if directory exists
+            // Instead of deleting all token files, we'll only delete empty or corrupted ones
             if (Directory.Exists(tokenCacheDir))
             {
-                // Delete all files with specific extensions
                 foreach (string file in Directory.GetFiles(tokenCacheDir, "*.*"))
                 {
                     string extension = Path.GetExtension(file).ToLower();
+                    // Only check token files
                     if (extension == ".token" || extension == ".lifetime" || extension == ".cache")
                     {
-                        try
+                        var fileInfo = new FileInfo(file);
+                        if (fileInfo.Length == 0 || fileInfo.Length < 50) // Check for suspiciously small files
                         {
-                            // Try to securely delete sensitive token files
-                            SecureDeleteFile(file);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Warning: Could not delete file {file}: {ex.Message}");
-                            // Fallback to regular delete if secure delete fails
                             try
                             {
                                 File.Delete(file);
+                                Console.WriteLine($"Removed invalid token file: {Path.GetFileName(file)}");
                             }
-                            catch
+                            catch (Exception ex)
                             {
-                                Console.WriteLine($"Warning: Could not delete file {Path.GetFileName(file)}");
+                                Console.WriteLine($"Warning: Could not delete file {file}: {ex.Message}");
                             }
                         }
                     }
                 }
+                Console.WriteLine($"Token cache for {environment} environment checked.");
             }
-
-            Console.WriteLine($"Token cache for {environment} environment cleared.");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Error cleaning up token cache: {ex.Message}");
+            Console.WriteLine($"Warning: Error checking token cache: {ex.Message}");
         }
     }
 
